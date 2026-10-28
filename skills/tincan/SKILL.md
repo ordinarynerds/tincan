@@ -1,0 +1,29 @@
+---
+name: tincan
+description: Work through feedback notes left on a running macOS app with Tincan. Use when the user says they left notes, review notes, Tincan notes, or feedback "in the app", or asks to carry on with feedback, and whenever a `.tincan/` folder exists in the repository with open notes.
+---
+
+# Tincan notes
+
+People point at things in the running app and write what is wrong. Each note says exactly where:
+the element's accessibility role, label, value and identifier, the view class, its rect in the window,
+the app's own context (such as the current screen), and screenshots.
+
+## Workflow
+
+1. `tincan list` shows open notes, oldest first. If the command is missing, build it from the
+   Tincan package (`swift build -c release --product tincan`) or read `.tincan/notes/*.json` directly.
+2. For each note, `tincan show <id>`, then open the image paths it prints. The element image is what
+   the person was looking at; the window image shows where it sits.
+3. Find the code: search for the identifier, then the label, title or value text (also in string
+   catalogs, since labels are usually localized), then the type named on the `View:` line. Use the
+   context line to narrow down the screen.
+4. Fix what the note means, not only the spot it points at. If the same problem appears elsewhere,
+   fix it everywhere in the same change.
+5. Rebuild, run the app, and look at the result.
+6. `tincan resolve <id> -m "<one line: what changed>"`.
+
+Leave a note open and ask the person when it is ambiguous or conflicts with an earlier decision.
+
+To take notes as they arrive while the person is still reviewing, run `tincan watch --json` in the
+background and handle each line.
