@@ -23,5 +23,9 @@ public enum AgentGuide {
 
         To keep working while the person is still leaving notes, run `tincan watch` in the background
         and handle each note as it arrives.
+
+        If the `tincan_*` MCP tools are available, use them instead: `tincan_list_notes`, then
+        `tincan_get_note`, which attaches the screenshots as images, then `tincan_resolve_note` with the
+        same one-line summary.
         """
 }

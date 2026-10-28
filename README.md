@@ -57,13 +57,19 @@ The note sheet has two switches: a screenshot of the element (or region) with a 
 
 Notes already left show as numbered pins. Hover a pin to read it; click it to copy its id, resolve it or delete it.
 
+A pin in the menu bar shows whether review mode is on (filled orange) and how many notes are open. Its menu starts and stops review mode, lists the latest open notes (choose one to copy its id), copies `tincan list` for your agent, and shows the notes folder in Finder. Turn it off with `Tincan.Configuration(showsStatusItem: false)`.
+
 ## Working through notes, as an agent
 
 ```sh
 tincan list                       # open notes, oldest first
 tincan show <id>                  # every field, with absolute paths to the images
 tincan resolve <id> -m "Widened the size column so 0.1 GB of 15 GB fits"
+tincan reopen <id>                # the fix did not hold
+tincan delete <id>                # remove a note and its images
+tincan path                       # where notes are stored
 tincan watch                      # print new notes as they arrive
+tincan mcp                        # serve the notes over MCP (below)
 tincan agents                     # the instructions below, for your agent's context
 ```
 
