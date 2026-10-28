@@ -8,6 +8,77 @@ Your agent reads notes with the `tincan` command, fixes them, and marks them res
 
 No screenshots to crop, no "the button on the left, no, the other one".
 
+## Let your agent set it up
+
+Paste this into Claude Code, Codex, Cursor or any coding agent, from the root of your app's repository:
+
+````text
+Set up Tincan (https://github.com/ordinarynerds/tincan) in this macOS app, so I can point at things in
+the running debug build and leave notes that you then fix. Do every step, then tell me what you did.
+
+1. Add the Swift package https://github.com/ordinarynerds/tincan, from version 0.1.0, and link its
+   `Tincan` library to the app target.
+   - Package.swift: add it to `dependencies` and the product to the app target.
+   - XcodeGen (project.yml) or Tuist: add it there and regenerate the project.
+   - A plain .xcodeproj: do not hand-edit project.pbxproj. Stop and ask me to add it with
+     File > Add Package Dependencies, then continue once I have.
+
+2. Install it when the app finishes launching, in debug builds only:
+
+       #if DEBUG
+       import Tincan
+       #endif
+
+       // in applicationDidFinishLaunching, or the SwiftUI App's init:
+       #if DEBUG
+       Tincan.install(Tincan.Configuration { ["screen": <the current screen or section, as a string>] })
+       #endif
+
+   Replace the placeholder with whatever this app uses to know where the person is (a selected
+   sidebar item, a navigation path, a tab), or pass no closure if there is nothing like that. For a
+   SwiftUI App without an app delegate, add an NSApplicationDelegateAdaptor and install from it.
+   If the app already has a Help or Debug menu, you may add a "Review Mode" item that calls
+   `Tincan.toggle()` and pass `shortcut: nil` to the configuration.
+
+3. If the app is sandboxed, it cannot write into the repository. Set the scheme's environment
+   variable TINCAN_DIR to a folder inside the app's container and tell me the path, because you
+   will need the same TINCAN_DIR when you read notes.
+
+4. Install the command line tool:
+
+       git clone --depth 1 https://github.com/ordinarynerds/tincan /tmp/tincan-src
+       swift build -c release --product tincan --package-path /tmp/tincan-src
+       mkdir -p ~/.local/bin && cp /tmp/tincan-src/.build/release/tincan ~/.local/bin/
+
+   Make sure `tincan help` runs (add ~/.local/bin to PATH if it does not).
+
+5. Give yourself the tools:
+   - Copy /tmp/tincan-src/skills/tincan/SKILL.md to .claude/skills/tincan/SKILL.md (Claude Code), or
+     to wherever this agent keeps skills.
+   - If you support MCP, register a stdio server named tincan with the command `tincan mcp`, run
+     from this repository. For Claude Code: `claude mcp add tincan -- tincan mcp`. It needs a new
+     session to load.
+   - Add this to AGENTS.md or CLAUDE.md:
+
+         ## Feedback left in the running app
+         Notes left on the debug build with Tincan land in .tincan/. When I say "carry on" or
+         mention notes, run `tincan list`, work each note with the tincan skill (or the tincan_*
+         MCP tools), and resolve it with `tincan resolve <id> -m "<what changed>"` only after the
+         fix is built and seen working.
+
+6. Build the app in Debug and fix anything that fails. Do not change any other behaviour.
+
+7. Tell me how to try it: run the app, choose Review in the floating bar at the top of the screen
+   (or press ⌃⌥⌘T), click anything, write a note and save it. Then run `tincan list` yourself to
+   confirm the note arrived, show me what it recorded, and delete it with `tincan delete <id>`.
+````
+
+Once notes are in, this is all it takes:
+
+```text
+Work through my Tincan notes.
+```
+
 ## Install
 
 Add the package in Xcode (File > Add Package Dependencies) or in `Package.swift`:
