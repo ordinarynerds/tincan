@@ -43,6 +43,15 @@ cp .build/release/tincan /usr/local/bin/
 
 ## Leaving notes
 
+Everything works with the pointer alone, from a small bar that floats above the app, or with keys:
+
+| Floating bar | Keys | |
+|---|---|---|
+| Review / Done | ⌃⌥⌘T, Esc | Start or stop review mode |
+| Use App | Hold ⌥ | Clicks reach the app while review mode stays on |
+| Leave Notes | Release ⌥ | Clicks and drags leave notes again |
+| The notes button | | Open notes, copy an id, copy `tincan list`, show the folder, hide the bar |
+
 | | |
 |---|---|
 | ⌃⌥⌘T | Start or stop review mode |
@@ -58,6 +67,8 @@ The note sheet has two switches: a screenshot of the element (or region) with a 
 Notes already left show as numbered pins. Hover a pin to read it; click it to copy its id, resolve it or delete it.
 
 A pin in the menu bar shows whether review mode is on (filled orange) and how many notes are open. Its menu starts and stops review mode, lists the latest open notes (choose one to copy its id), copies `tincan list` for your agent, and shows the notes folder in Finder. Turn it off with `Tincan.Configuration(showsStatusItem: false)`.
+
+The floating bar sits centred above the Dock until you drag it somewhere else, and stays where you leave it. It hides while the app is in the background, is never in a screenshot, and never gets an overlay. Hide it from its notes menu and bring it back from the menu bar switch, or turn it off with `Tincan.Configuration(showsFloatingBar: false)`.
 
 ## Working through notes, as an agent
 

@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Testing
+import TincanCore
 
 @testable import Tincan
 
@@ -89,5 +90,55 @@ struct WindowTests {
         let outlined = try #require(WindowCapture.outlined(shot, rect: CGRect(x: 50, y: 50, width: 100, height: 40)))
         #expect(outlined.width == shot.image.width)
         #expect(WindowCapture.png(crop)?.isEmpty == false)
+    }
+}
+
+@MainActor
+@Suite("Working without the keyboard")
+struct PointerOnlyTests {
+    @Test("a shortcut reads the way a Mac menu writes it")
+    func shortcutText() {
+        #expect(Tincan.Shortcut.default.displayString == "⌃⌥⌘T")
+        #expect(Tincan.Shortcut(key: "R", modifiers: [.command, .shift]).displayString == "⇧⌘R")
+    }
+
+    @Test("clicks reach the app while ⌥ is held or Use App is chosen, and never while a note is open")
+    func passThrough() {
+        #expect(!ReviewSession.passesThrough(optionHeld: false, usingApp: false, composing: false))
+        #expect(ReviewSession.passesThrough(optionHeld: true, usingApp: false, composing: false))
+        #expect(ReviewSession.passesThrough(optionHeld: false, usingApp: true, composing: false))
+        #expect(!ReviewSession.passesThrough(optionHeld: true, usingApp: true, composing: true))
+    }
+
+    @Test("the bar starts centred above the Dock, and a saved spot off every screen is not used")
+    func barPosition() {
+        let visible = CGRect(x: 0, y: 80, width: 1440, height: 820)
+        #expect(FloatingBar.defaultOrigin(size: CGSize(width: 240, height: 34), visibleFrame: visible) == CGPoint(x: 600, y: 104))
+        #expect(FloatingBar.isOnScreen(CGRect(x: 100, y: 100, width: 240, height: 34), screens: [visible]))
+        #expect(!FloatingBar.isOnScreen(CGRect(x: 1300, y: 100, width: 240, height: 34), screens: [visible]))
+        #expect(FloatingBar.isOnScreen(
+            CGRect(x: 1500, y: 100, width: 240, height: 34),
+            screens: [visible, CGRect(x: 1440, y: 0, width: 1920, height: 1080)]))
+    }
+
+    @Test("the notes menu offers the same items wherever it opens, newest notes numbered as pins are")
+    func notesMenu() throws {
+        let store = NoteStore(
+            directory: FileManager.default.temporaryDirectory.appendingPathComponent("tincan-menu-\(UUID().uuidString)"))
+        for index in 0..<10 {
+            try store.save(Note(
+                id: "20260101-0000\(String(format: "%02d", index))-aaaa", created: Date(timeIntervalSince1970: Double(index)),
+                text: "Note \(index)", app: .init(bundleID: nil, name: "Example", version: nil, build: nil), context: [:],
+                window: .init(title: "Main", identifier: nil, size: .init(width: 800, height: 600), scale: 2),
+                target: .init(kind: .region, rect: .init(x: 0, y: 0, width: 10, height: 10))))
+        }
+        let menu = NSMenu()
+        NotesMenu.populate(menu, store: store, shortcut: .default)
+        let titles = menu.items.filter { !$0.isSeparatorItem }.map(\.title)
+        #expect(titles.first == "Start Review Mode")
+        #expect(titles.contains("10 open notes"))
+        #expect(titles.contains("3. Note 2"))
+        #expect(!titles.contains("2. Note 1"))
+        #expect(titles.suffix(2) == ["Copy “tincan list” for Your Agent", "Show Notes in Finder"])
     }
 }

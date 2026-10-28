@@ -15,7 +15,8 @@ final class ReviewSession: NSObject {
     private var timer: Timer?
     private var popover: NSPopover?
     private var running = false
-    private var lastOpenCount = -1
+    private var optionHeld = false
+    var usingApp = false { didSet { applyPassThrough() } }
 
     struct Overlay {
         weak var window: NSWindow?
@@ -24,7 +25,14 @@ final class ReviewSession: NSObject {
     }
 
     static let instructions =
-        "Click something, or drag across a region, to leave a note. Hold ⌥ to use the app. Esc to finish."
+        "Click something, or drag across a region, to leave a note. Hold ⌥ or choose Use App to use the app. Esc or Done to finish."
+    static let usingAppInstructions = "Clicks reach the app. Choose Leave Notes in the Tincan bar to point at things again."
+
+    /// Clicks go to the app while ⌥ is held or Use App is chosen, but never while a note is open,
+    /// since the note sheet belongs to the overlay.
+    static func passesThrough(optionHeld: Bool, usingApp: Bool, composing: Bool) -> Bool {
+        (optionHeld || usingApp) && !composing
+    }
 
     init(store: NoteStore, context: @escaping @MainActor () -> [String: String]) {
         self.store = store
@@ -103,7 +111,7 @@ final class ReviewSession: NSObject {
             panel.isOpaque = false
             panel.backgroundColor = .clear
             panel.hasShadow = false
-            panel.ignoresMouseEvents = false
+            panel.ignoresMouseEvents = passingThrough
             panel.acceptsMouseMovedEvents = true
             panel.isReleasedWhenClosed = false
             panel.collectionBehavior = [.fullScreenAuxiliary, .ignoresCycle]
@@ -130,13 +138,23 @@ final class ReviewSession: NSObject {
         overlays.values.first { $0.view === view }
     }
 
+    private var passingThrough: Bool {
+        Self.passesThrough(optionHeld: optionHeld, usingApp: usingApp, composing: popover != nil)
+    }
+
+    private func applyPassThrough() {
+        let pass = passingThrough
+        for overlay in overlays.values {
+            overlay.panel.ignoresMouseEvents = pass
+            if pass { overlay.view.highlight = nil }
+        }
+        refreshPins()
+    }
+
     private func handle(isFlags: Bool, option: Bool, escape: Bool) -> Bool {
         if isFlags {
-            let passThrough = option && popover == nil
-            for overlay in overlays.values {
-                overlay.panel.ignoresMouseEvents = passThrough
-                if passThrough { overlay.view.highlight = nil }
-            }
+            optionHeld = option
+            applyPassThrough()
             return false
         }
         guard escape, popover == nil else { return false }
@@ -159,13 +177,10 @@ final class ReviewSession: NSObject {
                     y: min(max(rect.minY, 12), size.height - 12))
                 return OverlayView.Pin(number: index + 1, noteID: note.id, text: note.text, center: center)
             }
-            overlay.view.instructions =
-                open.isEmpty ? Self.instructions : "\(Self.instructions) \(open.count) open."
+            let base = usingApp && !optionHeld ? Self.usingAppInstructions : Self.instructions
+            overlay.view.instructions = open.isEmpty ? base : "\(base) \(open.count) open."
         }
-        if open.count != lastOpenCount {
-            lastOpenCount = open.count
-            Tincan.notesChanged()
-        }
+        Tincan.notesChanged(openCount: open.count)
     }
 
     // MARK: - Writing a note
@@ -193,6 +208,8 @@ final class ReviewSession: NSObject {
             popover?.close()
             self?.popover = nil
             overlay.view.pinned = nil
+            Tincan.composingChanged(false)
+            self?.applyPassThrough()
         }
         let composer = Composer(
             title: target.summary, isRegion: target.kind == .region, canAttach: shot != nil,
@@ -207,6 +224,7 @@ final class ReviewSession: NSObject {
             cancel: close)
         popover.contentViewController = NSHostingController(rootView: composer)
         self.popover = popover
+        Tincan.composingChanged(true)
         popover.show(relativeTo: rect.insetBy(dx: -2, dy: -2), of: overlay.view, preferredEdge: .maxY)
         popover.contentViewController?.view.window?.makeKey()
     }

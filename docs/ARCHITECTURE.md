@@ -14,6 +14,7 @@ be running.
 - [Coordinates](#coordinates)
 - [Keys and the pointer](#keys-and-the-pointer)
 - [Pins and the menu bar switch](#pins-and-the-menu-bar-switch)
+- [The floating bar](#the-floating-bar)
 - [Where notes are stored](#where-notes-are-stored)
 - [The note on disk](#the-note-on-disk)
 - [An agent working through notes](#an-agent-working-through-notes)
@@ -30,7 +31,7 @@ flowchart LR
 
     subgraph app["The app under review (debug build)"]
         direction TB
-        lib["Tincan library<br/>overlay, note sheet, pins,<br/>menu bar switch"]
+        lib["Tincan library<br/>overlay, note sheet, pins,<br/>floating bar, menu bar switch"]
         appcode["The app's own windows<br/>and accessibility tree"]
         lib -- "hit test, draw window" --> appcode
     end
@@ -95,14 +96,14 @@ insensitive, and `Sources/tincan` would be the same folder as `Sources/Tincan`.
 ```mermaid
 stateDiagram-v2
     [*] --> Installed: Tincan.install()
-    Installed --> Waking: start() from the shortcut, a menu command or the menu bar switch
+    Installed --> Waking: start() from the shortcut, the floating bar, a menu command or the menu bar switch
     Waking --> Reviewing: accessibility tree is awake, overlays attached
     Waking --> Installed: stop() before waking finished
     Reviewing --> Composing: click or drag, after the window is captured
     Composing --> Reviewing: Save Note, Cancel or Esc
-    Reviewing --> PassingThrough: hold Option
-    PassingThrough --> Reviewing: release Option
-    Reviewing --> Installed: Esc, the shortcut again, or the menu bar switch
+    Reviewing --> PassingThrough: hold Option, or Use App in the bar
+    PassingThrough --> Reviewing: release Option, or Leave Notes in the bar
+    Reviewing --> Installed: Esc, Done, the shortcut again, or the menu bar switch
 ```
 
 `install` creates the store, the menu bar switch and the shortcut monitor once. Each `start` creates a
@@ -114,7 +115,10 @@ flowchart TD
     install["Tincan.install(configuration)"] --> resolve["TincanLocation.resolve<br/>using #filePath of the caller"]
     resolve --> store["NoteStore(directory)"]
     install --> status{"showsStatusItem?"}
-    status -- yes --> item["StatusItem<br/>NSStatusItem, 5 s refresh"]
+    status -- yes --> item["StatusItem<br/>NSStatusItem"]
+    install --> barq{"showsFloatingBar?"}
+    barq -- yes --> bar["FloatingBar<br/>floating panel, SwiftUI controls"]
+    install --> counter["5 s timer: refreshCount()<br/>open count for the bar and the switch"]
     install --> shortcut{"shortcut set?"}
     shortcut -- yes --> keymon["Local keyDown monitor<br/>toggles review mode"]
     shortcut -- "nil: the app has its own menu command" --> none["App calls Tincan.toggle()"]
@@ -253,7 +257,7 @@ flowchart TD
     sc -- no --> active{"Review mode on?"}
     active -- no --> app["Event reaches the app"]
     active -- yes --> kind{"Event type"}
-    kind -- "flagsChanged" --> opt{"Option held and<br/>no note sheet open?"}
+    kind -- "flagsChanged" --> opt{"Option held or Use App chosen,<br/>and no note sheet open?"}
     opt -- yes --> pass["Panels ignore the mouse:<br/>clicks reach the app"]
     opt -- no --> catchm["Panels take the mouse again"]
     pass --> app
@@ -283,11 +287,11 @@ sequenceDiagram
         D-->>S: open notes, oldest first
         S->>O: pins for notes whose window title matches,<br/>at the top-right corner of each target
         alt the open count changed
-            S->>M: Tincan.notesChanged()
+            S->>M: Tincan.notesChanged(openCount:)
             M->>M: refresh icon and count
         end
     end
-    Note over M: also refreshes itself every 5 s,<br/>so a note resolved by an agent<br/>updates the count with review mode off
+    Note over M: Tincan also re-reads the count every 5 s,<br/>so a note resolved by an agent<br/>updates the count with review mode off
 ```
 
 Pins are numbered across all open notes, so pin 3 in the app is the third note in `tincan list`.
@@ -296,7 +300,54 @@ Clicking or right-clicking a pin opens Copy Note ID, Mark as Resolved and Delete
 The menu bar switch shows `mappin.circle` when review mode is off and an orange filled
 `mappin.circle.fill` when it is on, with the open count beside it. Its menu is rebuilt each time it
 opens: Start or Stop Review Mode, the last eight open notes (choosing one copies its id), Copy
-“tincan list” for Your Agent, and Show Notes in Finder.
+“tincan list” for Your Agent, Show Notes in Finder, and Show or Hide Floating Bar. `NotesMenu` builds
+it, and the floating bar's notes button opens the same menu.
+
+## The floating bar
+
+Everything the keys do, with the pointer alone.
+
+```mermaid
+flowchart LR
+    subgraph off["Review mode off"]
+        direction LR
+        g1["drag grip"] --- review["Review"] --- n1["notes button, open count"]
+    end
+    subgraph on["Review mode on"]
+        direction LR
+        g2["drag grip"] --- pin["orange pin"] --- seg["Leave Notes | Use App"] --- done["Done"] --- n2["notes button, open count"]
+    end
+    review -- "Tincan.start()" --> on
+    done -- "Tincan.stop()" --> off
+    seg -- "Tincan.isUsingApp" --> session["ReviewSession.usingApp<br/>panels let clicks through"]
+    n1 --> menu["NotesMenu, the same menu<br/>as the menu bar switch"]
+    n2 --> menu
+```
+
+```mermaid
+flowchart TD
+    state["ReviewState (@Observable)<br/>isActive, isUsingApp,<br/>isComposing, openCount"]
+    tincan["Tincan<br/>start, stop, isUsingApp,<br/>notesChanged, composingChanged"] -- writes --> state
+    state -- "SwiftUI observes" --> view["BarView"]
+    tincan -- "stateChanged()" --> fit["FloatingBar.fit()<br/>resize around the bar's centre"]
+    tincan -- "stateChanged()" --> item["StatusItem.refresh()"]
+    view -- "buttons call" --> tincan
+```
+
+- **Its own panel.** A borderless, non-activating `NSPanel` at the floating level that can never be
+  key or main, so clicking it leaves the app's window focused. Review mode only attaches overlays to
+  windows that are not panels, so the bar never gets one, and window captures never include it.
+- **First click works.** The hosting view and the drag area accept the first mouse, so a control works
+  without bringing the bar forward first.
+- **Where it sits.** Centred 24 pt above the Dock at first. Dragging anywhere that is not a control
+  moves it, and its origin is saved in `TincanFloatingBarOrigin`. A saved spot that is no longer
+  fully on a screen is ignored, so unplugging a display cannot strand it.
+- **When it shows.** It hides while the app is in the background and comes back with it. Hiding it
+  from the notes menu is remembered in `TincanFloatingBarHidden`; Show Floating Bar in the menu bar
+  switch brings it back. When the switch is off, Hide is disabled and says why, because the bar would
+  be the only way back without the keyboard.
+- **While a note is open.** Use App and Done are disabled and say "Finish or cancel the note first",
+  because the note sheet belongs to the overlay and closing review mode would throw the words away.
 
 ## Where notes are stored
 
@@ -535,6 +586,8 @@ flowchart LR
         reader["ElementReader"]
         capture["WindowCapture"]
         status["StatusItem"]
+        bar["FloatingBar, BarView"]
+        state["ReviewState"]
         composer["Composer (SwiftUI)"]
     end
     subgraph bg["Off the main thread"]
