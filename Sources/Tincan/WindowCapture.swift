@@ -1,10 +1,13 @@
 import AppKit
 import ScreenCaptureKit
 
-/// A picture of one window, taken before the note sheet opens so the sheet is never in it.
+/// A picture of one window, with any sheet the app has open on it, taken before the note sheet opens
+/// so the note sheet is never in it.
 ///
 /// When the app already has Screen Recording permission, ScreenCaptureKit takes the picture exactly
-/// as it is on screen. Otherwise the window draws itself into a bitmap, which needs no permission.
+/// as it is on screen. Without it, the window server still hands an app the pixels of its own
+/// windows, through `CGWindowListCreateImage`. Last comes asking the window to draw itself, which
+/// leaves out everything SwiftUI renders, since SwiftUI draws through layers and not `draw(_:)`.
 /// Tincan never asks for the permission itself: a review tool that triggers a privacy prompt in the
 /// app under review changes the very thing being reviewed.
 @MainActor
@@ -15,8 +18,54 @@ enum WindowCapture {
     }
 
     static func capture(_ window: NSWindow) async -> Shot? {
-        if CGPreflightScreenCaptureAccess(), let shot = await screenCapture(window) { return shot }
-        return drawn(window)
+        if window.attachedSheet == nil, CGPreflightScreenCaptureAccess(), let shot = await screenCapture(window) { return shot }
+        return ownWindow(window) ?? drawn(window)
+    }
+
+    private typealias WindowListImage = @convention(c) (CGRect, UInt32, CGWindowID, UInt32) -> Unmanaged<CGImage>?
+
+    /// Swift marks `CGWindowListCreateImage` unavailable from the macOS 15 SDK, in favour of
+    /// ScreenCaptureKit, but CoreGraphics still exports it and it is the one call that reads an app's
+    /// own window without the permission. It is looked up at run time, so a macOS that drops it
+    /// falls through to the drawn picture instead of failing to launch.
+    private static let windowListImage: WindowListImage? = {
+        guard let handle = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY),
+              let symbol = dlsym(handle, "CGWindowListCreateImage")
+        else { return nil }
+        return unsafeBitCast(symbol, to: WindowListImage.self)
+    }()
+
+    static func ownWindow(_ window: NSWindow) -> Shot? {
+        guard let create = windowListImage, window.windowNumber > 0 else { return nil }
+        if let sheet = frontSheet(of: window) { return withSheet(window, sheet: sheet, create: create) }
+        let includingWindow: UInt32 = 1 << 3
+        let ignoringFramingAtBestResolution: UInt32 = (1 << 0) | (1 << 3)
+        guard let image = create(.null, includingWindow, CGWindowID(window.windowNumber), ignoringFramingAtBestResolution)?
+            .takeRetainedValue(), image.width > 1
+        else { return nil }
+        return Shot(image: image, scale: CGFloat(image.width) / max(window.frame.width, 1))
+    }
+
+    private static func frontSheet(of window: NSWindow) -> NSWindow? {
+        var front: NSWindow?
+        while let sheet = (front ?? window).attachedSheet, sheet.isVisible, sheet.windowNumber > 0 { front = sheet }
+        return front
+    }
+
+    /// A sheet is a window of its own, so a picture of the window alone shows what is behind the
+    /// sheet. The window's rect is taken from the front sheet down, which is the sheet over the window
+    /// as the person sees it.
+    private static func withSheet(_ window: NSWindow, sheet: NSWindow, create: WindowListImage) -> Shot? {
+        let top = NSScreen.screens.first?.frame.maxY ?? window.frame.maxY
+        let bounds = CGRect(
+            x: window.frame.minX, y: top - window.frame.maxY, width: window.frame.width, height: window.frame.height)
+        let onScreenBelowWindow: UInt32 = 1 << 2
+        let includingWindow: UInt32 = 1 << 3
+        let bestResolution: UInt32 = 1 << 3
+        guard let image = create(bounds, onScreenBelowWindow | includingWindow, CGWindowID(sheet.windowNumber), bestResolution)?
+            .takeRetainedValue(), image.width > 1
+        else { return nil }
+        return Shot(image: image, scale: CGFloat(image.width) / max(window.frame.width, 1))
     }
 
     static func drawn(_ window: NSWindow) -> Shot? {

@@ -9,12 +9,29 @@ final class ReviewSession: NSObject {
     let store: NoteStore
     let context: @MainActor () -> [String: String]
 
-    private var overlays: [ObjectIdentifier: Overlay] = [:]
+    var overlays: [ObjectIdentifier: Overlay] = [:]
     private var observers: [NSObjectProtocol] = []
     private var monitor: Any?
     private var timer: Timer?
-    private var popover: NSPopover?
-    private var running = false
+    var popover: NSPopover?
+    /// The sheet on screen, with the words in it.
+    var sheet: Sheet?
+    /// Words put aside by cancelling a sheet, by what they were written about, offered again.
+    var drafts: [String: String] = [:]
+    var lastCancelled: (key: String, text: String)?
+    /// Fixes still to step through, while checking fixes.
+    var checking: Checking?
+    /// A note asked for before the overlays were up, shown as soon as they are.
+    var pendingShow: (() -> Void)?
+    /// A fix is being photographed before its sheet opens.
+    var presenting = false
+    /// The context the pins were last placed for. When it changes, earlier searches are stale.
+    private var lastContext: [String: String] = [:]
+    private let screenText = ScreenText()
+    /// How far above the innermost layer the person has stepped with ↑, and which stack that was in.
+    private var level = 0
+    private var levelAnchor: String?
+    var running = false
     private var optionHeld = false
     var usingApp = false { didSet { applyPassThrough() } }
 
@@ -25,7 +42,12 @@ final class ReviewSession: NSObject {
     }
 
     static let instructions =
-        "Click something, or drag across a region, to leave a note. Hold ⌥ or choose Use App to use the app. Esc or Done to finish."
+        "Click something, or drag across a region, to leave a note. Click a pin to open its note. ↑ and ↓ choose the parent or child. Hold ⌥ or choose Use App to use the app. Esc or Done to finish."
+    /// What the bottom line shrinks to once the instructions have been shown a few times.
+    static let hints = "Click or drag to note    ↑ ↓ parent, child    Tab pins    ⌥ use the app    Esc done"
+    static let sessionsKey = "TincanReviewSessions"
+    /// How many times review mode shows the full instructions before only the hints.
+    static let fullInstructionSessions = 3
     static let spotLabel = "No element here. Click to note this spot, or drag around it."
     static let usingAppInstructions = "Clicks reach the app. Choose Leave Notes in the Tincan bar to point at things again."
 
@@ -40,8 +62,14 @@ final class ReviewSession: NSObject {
         self.context = context
     }
 
+    /// Whether the full instructions still show this session, rather than only the hints.
+    private var showsFullInstructions = true
+
     func start() {
         running = true
+        let sessions = UserDefaults.standard.integer(forKey: Self.sessionsKey)
+        showsFullInstructions = sessions < Self.fullInstructionSessions
+        UserDefaults.standard.set(sessions + 1, forKey: Self.sessionsKey)
         Task {
             await ElementReader.wake()
             guard running else { return }
@@ -66,8 +94,10 @@ final class ReviewSession: NSObject {
             let isFlags = event.type == .flagsChanged
             let option = event.modifierFlags.contains(.option)
             let escape = event.keyCode == 53
+            let step = event.keyCode == 126 ? 1 : event.keyCode == 125 ? -1 : 0
+            let key = Key(code: event.keyCode, shift: event.modifierFlags.contains(.shift))
             let swallow = MainActor.assumeIsolated {
-                self?.handle(isFlags: isFlags, option: option, escape: escape) ?? false
+                self?.handle(isFlags: isFlags, option: option, escape: escape, step: step, key: key) ?? false
             }
             return swallow ? nil : event
         }
@@ -80,6 +110,9 @@ final class ReviewSession: NSObject {
         running = false
         popover?.close()
         popover = nil
+        sheet = nil
+        checking = nil
+        pendingShow = nil
         timer?.invalidate()
         timer = nil
         if let monitor { NSEvent.removeMonitor(monitor) }
@@ -95,14 +128,14 @@ final class ReviewSession: NSObject {
 
     // MARK: - Windows
 
-    private func eligible(_ window: NSWindow) -> Bool {
-        window.isVisible && window.styleMask.contains(.titled) && !(window is NSPanel)
+    static func isReviewable(_ window: NSWindow) -> Bool {
+        window.isVisible && !window.isSheet && window.styleMask.contains(.titled) && !(window is NSPanel)
             && window.level == .normal && window.contentView != nil
     }
 
     private func attachOverlays() {
         guard running else { return }
-        for window in NSApp.windows where eligible(window) && overlays[ObjectIdentifier(window)] == nil {
+        for window in NSApp.windows where Self.isReviewable(window) && overlays[ObjectIdentifier(window)] == nil {
             let view = OverlayView(frame: CGRect(origin: .zero, size: window.frame.size))
             view.delegate = self
             view.instructions = Self.instructions
@@ -121,6 +154,10 @@ final class ReviewSession: NSObject {
             overlays[ObjectIdentifier(window)] = Overlay(window: window, panel: panel, view: view)
         }
         refreshPins()
+        if let pending = pendingShow {
+            pendingShow = nil
+            pending()
+        }
     }
 
     private func follow(_ window: NSWindow?) {
@@ -135,7 +172,7 @@ final class ReviewSession: NSObject {
         overlay.panel.orderOut(nil)
     }
 
-    private func overlay(for view: OverlayView) -> Overlay? {
+    func overlay(for view: OverlayView) -> Overlay? {
         overlays.values.first { $0.view === view }
     }
 
@@ -143,7 +180,7 @@ final class ReviewSession: NSObject {
         Self.passesThrough(optionHeld: optionHeld, usingApp: usingApp, composing: popover != nil)
     }
 
-    private func applyPassThrough() {
+    func applyPassThrough() {
         let pass = passingThrough
         for overlay in overlays.values {
             overlay.panel.ignoresMouseEvents = pass
@@ -152,11 +189,37 @@ final class ReviewSession: NSObject {
         refreshPins()
     }
 
-    private func handle(isFlags: Bool, option: Bool, escape: Bool) -> Bool {
+    struct Key {
+        var code: UInt16
+        var shift: Bool
+
+        var isTab: Bool { code == 48 }
+        var opens: Bool { code == 36 || code == 76 || code == 49 }
+    }
+
+    private func handle(isFlags: Bool, option: Bool, escape: Bool, step: Int, key: Key) -> Bool {
         if isFlags {
             optionHeld = option
             applyPassThrough()
             return false
+        }
+        if popover == nil, !passingThrough, let view = keyOverlay?.view {
+            if key.isTab { return view.focusPin(forward: !key.shift) }
+            if key.opens, let pin = view.focusedPin {
+                overlay(view, open: pin)
+                return true
+            }
+            if escape, view.focusedPinID != nil {
+                view.focusedPinID = nil
+                view.flash = nil
+                return true
+            }
+        }
+        if step != 0 {
+            guard popover == nil, !passingThrough, levelAnchor != nil else { return false }
+            level = max(0, level + step)
+            overlays.values.forEach { $0.view.refreshHover() }
+            return true
         }
         guard escape, popover == nil else { return false }
         Tincan.stop()
@@ -165,143 +228,140 @@ final class ReviewSession: NSObject {
 
     // MARK: - Pins
 
-    private func refreshPins() {
-        let open = store.notes(status: .open)
+    /// The overlay on the window the keys go to.
+    private var keyOverlay: Overlay? {
+        overlays.values.first { $0.window?.isKeyWindow == true } ?? overlays.values.first
+    }
+
+    /// Pins for the notes left on each window, here: on this screen of the app by its context, at
+    /// where their element is now. Fixes to check are always pinned; other resolved notes only with
+    /// Show Resolved Pins.
+    func refreshPins() {
+        let state = Tincan.state
+        let open = state.open
+        let context = context()
+        if context != lastContext {
+            lastContext = context
+            Tincan.locator.forget()
+        }
+        let keys = Tincan.configuration.placeKeys
+        let shown = state.notes.filter { note in
+            note.status == .open || note.awaitsCheck || Tincan.showsResolved
+        }
         for overlay in overlays.values {
             guard let window = overlay.window else { continue }
             let size = window.frame.size
-            overlay.view.pins = open.enumerated().compactMap { index, note in
-                guard note.window.title == window.title else { return nil }
-                let rect = Geometry.cgRect(note.target.rect)
-                let center = CGPoint(
-                    x: min(max(rect.maxX, 12), size.width - 12),
-                    y: min(max(rect.minY, 12), size.height - 12))
-                return OverlayView.Pin(number: index + 1, noteID: note.id, text: note.text, center: center)
+            overlay.view.pins = shown.compactMap { note -> OverlayView.Pin? in
+                guard note.window.title == window.title, note.isLeft(in: context, keys: keys) else { return nil }
+                let location = Tincan.locator.locate(note, in: window)
+                let kind: OverlayView.Pin.Kind
+                if note.status == .open {
+                    kind = .open(number: (open.firstIndex { $0.id == note.id } ?? 0) + 1)
+                } else if note.awaitsCheck {
+                    kind = .toCheck(summary: note.resolution?.summary ?? "")
+                } else {
+                    kind = .resolved(summary: note.resolution?.summary ?? "")
+                }
+                return OverlayView.Pin(
+                    kind: kind, noteID: note.id, text: note.text,
+                    center: OverlayView.Pin.center(for: location.rect, in: size), target: location.rect,
+                    targetSummary: note.target.summary, placement: location.placement,
+                    agent: Self.agent(for: note, listener: state.listener(for: note)))
             }
-            let base = usingApp && !optionHeld ? Self.usingAppInstructions : Self.instructions
-            overlay.view.instructions = open.isEmpty ? base : "\(base) \(open.count) open."
+            overlay.view.instructionsAreHints = !showsFullInstructions && !(usingApp && !optionHeld)
+            if usingApp && !optionHeld {
+                overlay.view.instructions = Self.usingAppInstructions
+            } else if showsFullInstructions {
+                overlay.view.instructions = open.isEmpty ? Self.instructions : "\(Self.instructions) \(open.count) open."
+            } else {
+                overlay.view.instructions = Self.hints
+            }
         }
-        Tincan.notesChanged(openCount: open.count)
     }
 
-    // MARK: - Writing a note
+    /// Whether an agent has a note: still waiting for it to listen, or working on it now.
+    static func agent(for note: Note, listener: Listener?) -> OverlayView.Pin.Agent? {
+        guard note.status == .open, let handoff = note.handoff else { return nil }
+        guard handoff.delivered != nil else { return .waiting(handoff.agent) }
+        return listener?.state == .working ? .working(handoff.agent) : nil
+    }
+}
 
-    private func screenPoint(_ point: CGPoint, in overlay: Overlay) -> CGPoint {
+extension ReviewSession {
+    func screenPoint(_ point: CGPoint, in overlay: Overlay) -> CGPoint {
         overlay.panel.convertPoint(toScreen: overlay.view.convert(point, to: nil))
-    }
-
-    private func compose(on overlay: Overlay, rect: CGRect, target: Note.Target) {
-        guard let window = overlay.window, popover == nil else { return }
-        overlay.view.pinned = rect
-        overlay.view.highlight = nil
-        Task {
-            let shot = await WindowCapture.capture(window)
-            guard running, overlays[ObjectIdentifier(window)] != nil else { return }
-            present(on: overlay, window: window, rect: rect, target: target, shot: shot)
-        }
-    }
-
-    private func present(on overlay: Overlay, window: NSWindow, rect: CGRect, target: Note.Target, shot: WindowCapture.Shot?) {
-        let defaults = UserDefaults.standard
-        let popover = NSPopover()
-        popover.behavior = .applicationDefined
-        let close: () -> Void = { [weak self, weak popover] in
-            popover?.close()
-            self?.popover = nil
-            overlay.view.pinned = nil
-            Tincan.composingChanged(false)
-            self?.applyPassThrough()
-        }
-        let listeners = store.listeners(at: Date())
-        let lastSent = defaults.string(forKey: "TincanSendTo")
-        let composer = Composer(
-            title: target.summary, isRegion: target.kind == .region, canAttach: shot != nil,
-            attachElement: defaults.object(forKey: "TincanAttachElement") as? Bool ?? true,
-            attachWindow: defaults.object(forKey: "TincanAttachWindow") as? Bool ?? true,
-            listeners: listeners,
-            sendTo: listeners.first { $0.name.caseInsensitiveCompare(lastSent ?? "") == .orderedSame }?.name,
-            save: { [weak self] draft in
-                defaults.set(draft.attachElement, forKey: "TincanAttachElement")
-                defaults.set(draft.attachWindow, forKey: "TincanAttachWindow")
-                if listeners.isEmpty == false { defaults.set(draft.sendTo, forKey: "TincanSendTo") }
-                self?.save(draft, window: window, overlay: overlay, rect: rect, target: target, shot: shot)
-                close()
-            },
-            cancel: close)
-        popover.contentViewController = NSHostingController(rootView: composer)
-        self.popover = popover
-        Tincan.composingChanged(true)
-        popover.show(relativeTo: rect.insetBy(dx: -2, dy: -2), of: overlay.view, preferredEdge: .maxY)
-        popover.contentViewController?.view.window?.makeKey()
-    }
-
-    private func save(
-        _ draft: Composer.Draft, window: NSWindow, overlay: Overlay, rect: CGRect,
-        target: Note.Target, shot: WindowCapture.Shot?
-    ) {
-        let info = Bundle.main.infoDictionary ?? [:]
-        let now = Date()
-        let note = Note(
-            id: NoteStore.makeID(at: now),
-            created: now,
-            text: draft.text,
-            app: Note.AppInfo(
-                bundleID: Bundle.main.bundleIdentifier,
-                name: (info["CFBundleName"] as? String) ?? ProcessInfo.processInfo.processName,
-                version: info["CFBundleShortVersionString"] as? String,
-                build: info["CFBundleVersion"] as? String),
-            context: context(),
-            window: Note.WindowInfo(
-                title: window.title, identifier: window.identifier?.rawValue,
-                size: Note.Size(width: window.frame.width, height: window.frame.height),
-                scale: Double(shot?.scale ?? window.backingScaleFactor)),
-            target: target,
-            handoff: draft.sendTo.map { Note.Handoff(agent: $0, sent: now) })
-        let element = draft.attachElement ? shot.flatMap { WindowCapture.crop($0, to: rect) }.flatMap(WindowCapture.png) : nil
-        let whole = draft.attachWindow ? shot.flatMap { WindowCapture.outlined($0, rect: rect) }.flatMap(WindowCapture.png) : nil
-        do {
-            let saved = try store.save(note, elementImage: element, windowImage: whole)
-            say(saved.handoff.map { "Sent to \($0.agent): note \(saved.id)." }
-                ?? "Saved note \(saved.id). Run `tincan list` to see it.", on: overlay)
-        } catch {
-            say("Could not save the note: \(error.localizedDescription)", on: overlay)
-        }
-        refreshPins()
-    }
-
-    private func say(_ message: String, on overlay: Overlay) {
-        overlay.view.flash = message
-        Task {
-            try? await Task.sleep(for: .seconds(3))
-            if overlay.view.flash == message { overlay.view.flash = nil }
-        }
     }
 }
 
 extension ReviewSession: OverlayViewDelegate {
-    func overlay(_ view: OverlayView, hoverAt point: CGPoint) -> OverlayView.Highlight? {
-        guard popover == nil, let overlay = overlay(for: view), let window = overlay.window else { return nil }
-        guard let hit = ElementReader.hit(at: screenPoint(point, in: overlay), in: window) else {
-            return .init(rect: Geometry.spot(around: point, within: view.bounds.size), label: Self.spotLabel, isSpot: true)
+    /// One thing a click could note: a line of text read from the screen, an element, or a spot.
+    struct Layer {
+        var rect: CGRect
+        var element: Note.Element?
+        var summary: String
+        var isSpot = false
+    }
+
+    /// Everything under the point, innermost first: the line of text, the element the app reports,
+    /// then each ancestor with a frame of its own. Empty space starts with a spot, so the containers
+    /// around it are still a ↑ away.
+    private func layers(at point: CGPoint, overlay: Overlay, window: NSWindow) -> [Layer] {
+        let hits = ElementReader.chain(at: screenPoint(point, in: overlay), in: window)
+        var layers: [Layer] = []
+        if let innermost = hits.first, !Geometry.coversWindow(innermost.screenFrame, windowFrame: window.frame) {
+            if let line = textLine(at: point, in: innermost, window: window, view: overlay.view) {
+                let element = ScreenText.element(line, in: innermost.element)
+                layers.append(Layer(rect: line.rect, element: element, summary: "\(element.summary) in \(innermost.element.summary)"))
+            }
+        } else {
+            layers.append(Layer(
+                rect: Geometry.spot(around: point, within: overlay.view.bounds.size), element: nil,
+                summary: Self.spotLabel, isSpot: true))
         }
+        layers += hits.map { hit in
+            Layer(rect: Geometry.windowTopLeft(hit.screenFrame, in: window.frame), element: hit.element, summary: hit.element.summary)
+        }
+        return layers
+    }
+
+    /// The layer the person has chosen at this point. Moving onto a different innermost layer starts
+    /// again from the innermost.
+    private func chosen(at point: CGPoint, overlay: Overlay, window: NSWindow) -> (layer: Layer, above: Layer?, depth: Int)? {
+        let stack = layers(at: point, overlay: overlay, window: window)
+        guard let innermost = stack.first else { return nil }
+        let anchor = "\(Int(innermost.rect.minX)),\(Int(innermost.rect.minY)),\(Int(innermost.rect.width)),\(Int(innermost.rect.height)) \(innermost.summary)"
+        if anchor != levelAnchor {
+            levelAnchor = anchor
+            level = 0
+        }
+        level = min(level, stack.count - 1)
+        return (stack[level], level + 1 < stack.count ? stack[level + 1] : nil, level)
+    }
+
+    func overlay(_ view: OverlayView, hoverAt point: CGPoint) -> OverlayView.Highlight? {
+        guard popover == nil, let overlay = overlay(for: view), let window = overlay.window,
+              let choice = chosen(at: point, overlay: overlay, window: window)
+        else { return nil }
         return .init(
-            rect: Geometry.windowTopLeft(hit.screenFrame, in: window.frame),
-            label: hit.element.summary)
+            rect: choice.layer.rect, label: choice.layer.summary, parent: choice.above?.summary,
+            canGoBack: choice.depth > 0, isSpot: choice.layer.isSpot)
+    }
+
+    private func textLine(at point: CGPoint, in hit: ElementReader.Hit, window: NSWindow, view: OverlayView) -> ScreenText.Line? {
+        guard ScreenText.reads(inside: hit, window: window) else { return nil }
+        let rect = Geometry.windowTopLeft(hit.screenFrame, in: window.frame)
+        let lines = screenText.lines(in: rect, of: window) { [weak view] in view?.refreshHover() }
+        return lines.flatMap { ScreenText.line(at: point, in: $0) }
     }
 
     func overlay(_ view: OverlayView, clickAt point: CGPoint) {
-        guard popover == nil, let overlay = overlay(for: view), let window = overlay.window else { return }
-        let screen = screenPoint(point, in: overlay)
-        let viewName = ElementReader.viewName(at: screen, in: window)
-        if let hit = ElementReader.hit(at: screen, in: window) {
-            let rect = Geometry.windowTopLeft(hit.screenFrame, in: window.frame)
-            compose(on: overlay, rect: rect, target: Note.Target(
-                kind: .element, rect: Geometry.rect(rect), element: hit.element, view: viewName))
-        } else {
-            let rect = Geometry.spot(around: point, within: view.bounds.size)
-            compose(on: overlay, rect: rect, target: Note.Target(
-                kind: .region, rect: Geometry.rect(rect), view: viewName))
-        }
+        guard popover == nil, let overlay = overlay(for: view), let window = overlay.window,
+              let layer = chosen(at: point, overlay: overlay, window: window)?.layer
+        else { return }
+        let viewName = ElementReader.viewName(at: screenPoint(point, in: overlay), in: window)
+        compose(on: overlay, rect: layer.rect, target: Note.Target(
+            kind: layer.element == nil ? .region : .element, rect: Geometry.rect(layer.rect),
+            element: layer.element, view: viewName))
     }
 
     func overlay(_ view: OverlayView, region rect: CGRect) {
@@ -309,25 +369,6 @@ extension ReviewSession: OverlayViewDelegate {
         let center = screenPoint(CGPoint(x: rect.midX, y: rect.midY), in: overlay)
         compose(on: overlay, rect: rect, target: Note.Target(
             kind: .region, rect: Geometry.rect(rect), view: ElementReader.viewName(at: center, in: window)))
-    }
-
-    func overlay(_ view: OverlayView, menuFor pin: OverlayView.Pin) -> NSMenu? {
-        let store = store
-        let menu = NSMenu()
-        menu.addItem(ActionItem("Copy Note ID") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(pin.noteID, forType: .string)
-        })
-        menu.addItem(ActionItem("Mark as Resolved") { [weak self] in
-            _ = try? store.resolve(pin.noteID, summary: "Resolved in the app")
-            self?.refreshPins()
-        })
-        menu.addItem(.separator())
-        menu.addItem(ActionItem("Delete Note") { [weak self] in
-            try? store.delete(pin.noteID)
-            self?.refreshPins()
-        })
-        return menu
     }
 }
 

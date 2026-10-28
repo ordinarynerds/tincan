@@ -30,6 +30,11 @@ enum Geometry {
 
     /// True when an element is really the window's background: a hit on it says nothing about what
     /// the person pointed at, so Tincan treats the click as a point in a region instead.
+    /// The window's own size or within a point of it: the window, not something in it.
+    static func isWholeWindow(_ frame: CGRect, windowFrame: CGRect) -> Bool {
+        frame.width * frame.height >= windowFrame.width * windowFrame.height * 0.98
+    }
+
     static func coversWindow(_ elementFrame: CGRect, windowFrame: CGRect) -> Bool {
         let overlap = elementFrame.intersection(windowFrame)
         guard !overlap.isNull, windowFrame.width > 0, windowFrame.height > 0 else { return false }

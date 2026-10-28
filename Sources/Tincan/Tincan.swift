@@ -32,6 +32,13 @@ public enum Tincan {
         /// A bar floating above the app with every control the keys offer, for working with the
         /// pointer alone. The person can hide it from its own menu.
         public var showsFloatingBar: Bool
+        /// Which context entries say where the person is, such as `["screen"]`. A pin shows only where
+        /// these match the note's. Nil means every entry.
+        public var placeKeys: Set<String>?
+        /// Takes the app to where a note was left, given that note's context, and answers whether it
+        /// could. With it, checking fixes and opening a note from the list go straight to its screen.
+        /// It comes after `context`, so `Configuration { … }` still passes the context.
+        public var navigate: (@MainActor ([String: String]) -> Bool)?
         /// Facts about the app's state worth attaching to every note, such as the current screen.
         public var context: @MainActor () -> [String: String]
 
@@ -40,12 +47,16 @@ public enum Tincan {
             shortcut: Shortcut? = .default,
             showsStatusItem: Bool = true,
             showsFloatingBar: Bool = true,
-            context: @escaping @MainActor () -> [String: String] = { [:] }
+            placeKeys: Set<String>? = nil,
+            context: @escaping @MainActor () -> [String: String] = { [:] },
+            navigate: (@MainActor ([String: String]) -> Bool)? = nil
         ) {
             self.directory = directory
             self.shortcut = shortcut
             self.showsStatusItem = showsStatusItem
             self.showsFloatingBar = showsFloatingBar
+            self.placeKeys = placeKeys
+            self.navigate = navigate
             self.context = context
         }
     }
@@ -80,7 +91,10 @@ public enum Tincan {
     static var statusItem: StatusItem?
     static var floatingBar: FloatingBar?
     static var countTimer: Timer?
+    static var watcher: NotesWatcher?
+    static var checkObserver: NSObjectProtocol?
     static let state = ReviewState()
+    static let locator = PinLocator()
 
     /// Where this app's notes are written, once `install` has run.
     public static var directory: URL? { store?.directory }
@@ -113,9 +127,20 @@ public enum Tincan {
         floatingBar = configuration.showsFloatingBar ? FloatingBar(store: store, shortcut: configuration.shortcut) : nil
         countTimer?.invalidate()
         countTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
-            MainActor.assumeIsolated { refreshCount() }
+            MainActor.assumeIsolated { refreshNotes() }
         }
-        refreshCount()
+        watcher?.stop()
+        watcher = NotesWatcher(store: store) { refreshNotes() }
+        refreshNotes()
+        let center = DistributedNotificationCenter.default()
+        if let checkObserver { center.removeObserver(checkObserver) }
+        checkObserver = center.addObserver(
+            forName: AccessibilityCheck.notification, object: store.directory.standardizedFileURL.path, queue: .main
+        ) { _ in
+            Task { @MainActor in
+                await AccessibilityCheck.run(store: store)
+            }
+        }
         if let monitor = shortcutMonitor { NSEvent.removeMonitor(monitor) }
         shortcutMonitor = nil
         if let shortcut = configuration.shortcut {
@@ -151,21 +176,9 @@ public enum Tincan {
         floatingBar?.setShown(shown)
     }
 
-    static func notesChanged(openCount: Int) {
-        guard openCount != state.openCount else { return }
-        state.openCount = openCount
-        stateChanged()
-    }
-
     static func composingChanged(_ composing: Bool) {
         state.isComposing = composing
         stateChanged()
-    }
-
-    /// The open count, read again so a note an agent resolved shows up with review mode off.
-    static func refreshCount() {
-        guard let store else { return }
-        notesChanged(openCount: store.notes(status: .open).count)
     }
 
     static func stateChanged() {

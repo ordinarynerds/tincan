@@ -5,7 +5,11 @@ protocol OverlayViewDelegate: AnyObject {
     func overlay(_ view: OverlayView, hoverAt point: CGPoint) -> OverlayView.Highlight?
     func overlay(_ view: OverlayView, clickAt point: CGPoint)
     func overlay(_ view: OverlayView, region rect: CGRect)
+    func overlay(_ view: OverlayView, open pin: OverlayView.Pin)
     func overlay(_ view: OverlayView, menuFor pin: OverlayView.Pin) -> NSMenu?
+    /// A click landed on the overlay while a note's sheet is open.
+    func overlayClickedOutsideSheet(_ view: OverlayView)
+    var isSheetOpen: Bool { get }
 }
 
 /// Draws over one window: the element under the pointer, a region being dragged, the pins of notes
@@ -15,28 +19,49 @@ protocol OverlayViewDelegate: AnyObject {
 final class OverlayView: NSView {
     struct Highlight: Equatable {
         var rect: CGRect
+        /// The layer under the pointer, in a person's words.
         var label: String
+        /// The layer ↑ would choose, when there is one.
+        var parent: String?
+        /// Whether ↓ steps back towards the innermost layer.
+        var canGoBack = false
         /// No element is here, so the rect is the spot a click would note, drawn dashed.
         var isSpot = false
-    }
-
-    struct Pin: Equatable {
-        var number: Int
-        var noteID: String
-        var text: String
-        var center: CGPoint
     }
 
     weak var delegate: OverlayViewDelegate?
     var highlight: Highlight? { didSet { if highlight != oldValue { needsDisplay = true } } }
     var pinned: CGRect? { didSet { needsDisplay = true } }
-    var pins: [Pin] = [] { didSet { if pins != oldValue { needsDisplay = true } } }
+    var pins: [Pin] = [] {
+        didSet {
+            guard pins != oldValue else { return }
+            if let focused = focusedPinID, !pins.contains(where: { $0.noteID == focused }) { focusedPinID = nil }
+            needsDisplay = true
+            updateRings()
+            NSAccessibility.post(element: self, notification: .layoutChanged)
+        }
+    }
     var instructions = "" { didSet { needsDisplay = true } }
+    /// Whether the instructions are the full sentence, or only a line of key hints.
+    var instructionsAreHints = false { didSet { needsDisplay = true } }
     var flash: String? { didSet { needsDisplay = true } }
+    /// The pin chosen with Tab, drawn with a focus ring and opened with Return.
+    var focusedPinID: String? { didSet { if focusedPinID != oldValue { needsDisplay = true } } }
 
-    private var dragStart: CGPoint?
-    private var dragRect: CGRect?
-    private var hoveredPin: Pin?
+    var dragStart: CGPoint?
+    var dragRect: CGRect?
+    var hoveredPin: Pin?
+    private var hoverPoint: CGPoint?
+    var ringLayers: [String: CAShapeLayer] = [:]
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("OverlayView is created in code only")
+    }
 
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -51,18 +76,31 @@ final class OverlayView: NSView {
 
     override func mouseMoved(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        hoverPoint = point
         hoveredPin = pin(at: point)
+        (hoveredPin == nil ? NSCursor.arrow : NSCursor.pointingHand).set()
         highlight = hoveredPin == nil ? delegate?.overlay(self, hoverAt: point) : nil
         needsDisplay = true
     }
 
+    /// Asks again what is under the pointer, after something it depends on has finished arriving.
+    func refreshHover() {
+        guard let point = hoverPoint, hoveredPin == nil, dragRect == nil else { return }
+        highlight = delegate?.overlay(self, hoverAt: point)
+    }
+
     override func mouseExited(with event: NSEvent) {
+        hoverPoint = nil
         highlight = nil
         hoveredPin = nil
         needsDisplay = true
     }
 
     override func mouseDown(with event: NSEvent) {
+        if delegate?.isSheetOpen == true {
+            delegate?.overlayClickedOutsideSheet(self)
+            return
+        }
         dragStart = convert(event.locationInWindow, from: nil)
         dragRect = nil
     }
@@ -80,6 +118,7 @@ final class OverlayView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        guard dragStart != nil else { return }
         defer {
             dragStart = nil
             dragRect = nil
@@ -90,8 +129,8 @@ final class OverlayView: NSView {
             return
         }
         let point = convert(event.locationInWindow, from: nil)
-        if let pin = pin(at: point), let menu = delegate?.overlay(self, menuFor: pin) {
-            menu.popUp(positioning: nil, at: point, in: self)
+        if let pin = pin(at: point) {
+            delegate?.overlay(self, open: pin)
             return
         }
         delegate?.overlay(self, clickAt: point)
@@ -103,77 +142,72 @@ final class OverlayView: NSView {
         NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
 
-    private func pin(at point: CGPoint) -> Pin? {
+    func pin(at point: CGPoint) -> Pin? {
         pins.last { hypot($0.center.x - point.x, $0.center.y - point.y) <= Self.pinRadius + 2 }
     }
 
     static let pinRadius: CGFloat = 10
 
-    override func draw(_ dirtyRect: NSRect) {
-        let accent = Style.accent
-        if let rect = pinned ?? dragRect ?? highlight?.rect {
-            let path = NSBezierPath(roundedRect: rect.insetBy(dx: -2, dy: -2), xRadius: 4, yRadius: 4)
-            let isSpot = pinned == nil && dragRect == nil && highlight?.isSpot == true
-            accent.withAlphaComponent(isSpot ? 0.06 : 0.12).setFill()
-            path.fill()
-            accent.setStroke()
-            path.lineWidth = 2
-            if isSpot { path.setLineDash([5, 3], count: 2, phase: 0) }
-            path.stroke()
+    // MARK: - Pins from the keyboard
+
+    /// Moves the focus to the next pin, or the previous one, in reading order. Answers whether there
+    /// was a pin to move to.
+    func focusPin(forward: Bool) -> Bool {
+        let ordered = pins.sorted { ($0.center.y, $0.center.x) < ($1.center.y, $1.center.x) }
+        guard !ordered.isEmpty else { return false }
+        let index = ordered.firstIndex { $0.noteID == focusedPinID }
+        let next: Int
+        if let index {
+            next = (index + (forward ? 1 : -1) + ordered.count) % ordered.count
+        } else {
+            next = forward ? 0 : ordered.count - 1
         }
-        if pinned == nil, dragRect == nil, let highlight {
-            drawTag(highlight.label, near: highlight.rect)
-        }
-        for pin in pins { drawPin(pin) }
-        let message = hoveredPin.map { "Note \($0.number): \($0.text)" } ?? flash ?? instructions
-        drawBanner(message)
+        focusedPinID = ordered[next].noteID
+        flash = ordered[next].banner
+        return true
     }
 
-    private func drawPin(_ pin: Pin) {
+    var focusedPin: Pin? { pins.first { $0.noteID == focusedPinID } }
+
+    // MARK: - Accessibility
+
+    override func isAccessibilityElement() -> Bool { false }
+
+    override func accessibilityChildren() -> [Any]? {
         let radius = Self.pinRadius
-        let circle = NSBezierPath(ovalIn: CGRect(
-            x: pin.center.x - radius, y: pin.center.y - radius, width: radius * 2, height: radius * 2))
-        Style.accent.setFill()
-        circle.fill()
-        NSColor.white.setStroke()
-        circle.lineWidth = 1.5
-        circle.stroke()
-        let text = NSAttributedString(string: "\(pin.number)", attributes: [
-            .font: NSFont.systemFont(ofSize: 11, weight: .bold), .foregroundColor: NSColor.white,
-        ])
-        let size = text.size()
-        text.draw(at: CGPoint(x: pin.center.x - size.width / 2, y: pin.center.y - size.height / 2))
+        return pins.map { pin in
+            let box = CGRect(x: pin.center.x - radius, y: pin.center.y - radius, width: radius * 2, height: radius * 2)
+            let frame = window.map { $0.convertToScreen(convert(box, to: nil)) } ?? .zero
+            return PinElement(noteID: pin.noteID, label: pin.banner, frame: frame, view: self)
+        }
     }
 
-    private func drawTag(_ label: String, near rect: CGRect) {
-        let text = NSAttributedString(string: label, attributes: [
-            .font: NSFont.systemFont(ofSize: 11, weight: .medium), .foregroundColor: NSColor.white,
-        ])
-        let size = text.size()
-        let width = min(size.width + 12, bounds.width - 8)
-        var origin = CGPoint(x: rect.minX - 2, y: rect.minY - size.height - 8)
-        if origin.y < 2 { origin.y = rect.maxY + 4 }
-        origin.x = min(max(2, origin.x), bounds.width - width - 2)
-        let box = CGRect(x: origin.x, y: origin.y, width: width, height: size.height + 4)
-        Style.accent.setFill()
-        NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4).fill()
-        text.draw(with: box.insetBy(dx: 6, dy: 2), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+    /// Opens the pin's note, for VoiceOver's press.
+    func openPin(id: String) -> Bool {
+        guard let pin = pins.first(where: { $0.noteID == id }) else { return false }
+        delegate?.overlay(self, open: pin)
+        return true
     }
 
-    private func drawBanner(_ message: String) {
-        guard !message.isEmpty else { return }
-        let text = NSAttributedString(string: message, attributes: [
-            .font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.white,
-        ])
-        let maxWidth = bounds.width - 40
-        let size = text.boundingRect(
-            with: CGSize(width: maxWidth - 28, height: 60), options: [.usesLineFragmentOrigin]
-        ).size
-        let box = CGRect(
-            x: (bounds.width - size.width - 28) / 2, y: bounds.height - size.height - 34,
-            width: size.width + 28, height: size.height + 14)
-        NSColor.black.withAlphaComponent(0.78).setFill()
-        NSBezierPath(roundedRect: box, xRadius: box.height / 2, yRadius: box.height / 2).fill()
-        text.draw(with: box.insetBy(dx: 14, dy: 7), options: [.usesLineFragmentOrigin])
+    /// A pin as VoiceOver sees it: a button named by what the bottom line says on hover.
+    final class PinElement: NSAccessibilityElement {
+        let noteID: String
+        nonisolated(unsafe) weak var view: OverlayView?
+
+        init(noteID: String, label: String, frame: CGRect, view: OverlayView) {
+            self.noteID = noteID
+            self.view = view
+            super.init()
+            setAccessibilityRole(.button)
+            setAccessibilityLabel(label)
+            setAccessibilityParent(view)
+            setAccessibilityFrame(frame)
+        }
+
+        override func accessibilityPerformPress() -> Bool {
+            let id = noteID
+            nonisolated(unsafe) let view = view
+            return MainActor.assumeIsolated { view?.openPin(id: id) ?? false }
+        }
     }
 }

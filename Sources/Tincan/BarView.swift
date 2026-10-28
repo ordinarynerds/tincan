@@ -16,6 +16,7 @@ struct BarView: View {
                 .help("Drag to move the bar")
                 .accessibilityHidden(true)
             if state.isActive { reviewing } else { start }
+            if !state.fixesToCheck.isEmpty { fixes }
             notes
         }
         .controlSize(.small)
@@ -61,14 +62,30 @@ struct BarView: View {
             .accessibilityLabel(state.isComposing ? "Done. \(Self.composingReason)" : "Done, leave review mode")
     }
 
+    private var fixes: some View {
+        let count = state.fixesToCheck.count
+        return Button {
+            Tincan.checkFixes()
+        } label: {
+            Label("Check \(count)", systemImage: "checkmark.seal.fill")
+                .monospacedDigit()
+        }
+        .tint(.green)
+        .disabled(state.isComposing)
+        .help(state.isComposing
+            ? Self.composingReason
+            : "\(count) fix\(count == 1 ? "" : "es") an agent made, waiting for you to look at. Steps through each at its pin.")
+        .accessibilityLabel(state.isComposing ? "Check fixes. \(Self.composingReason)" : "Check \(count) fixes")
+    }
+
     private var notes: some View {
         Button {
-            Tincan.floatingBar?.popUpNotes()
+            Tincan.floatingBar?.showNotes()
         } label: {
             Label("\(state.openCount)", systemImage: "list.bullet")
                 .monospacedDigit()
         }
-        .help("\(state.openCount) open note\(state.openCount == 1 ? "" : "s"). Choose for the list and more.")
+        .help("\(state.openCount) open note\(state.openCount == 1 ? "" : "s"). Choose for the list.")
         .accessibilityLabel("Notes, \(state.openCount) open")
     }
 }

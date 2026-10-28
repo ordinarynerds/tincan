@@ -18,13 +18,39 @@ public struct NoteFormatter: Sendable {
         lines.append("  Note: \(note.text.replacingOccurrences(of: "\n", with: "\n        "))")
         if let path = store.imageURL(note.images.element)?.path { lines.append("  Element image: \(path)") }
         if let path = store.imageURL(note.images.window)?.path { lines.append("  Window image: \(path)") }
+        if let path = store.imageURL(note.images.after)?.path {
+            lines.append("  After image: \(path)\(note.images.afterAt.map { ", taken \(age(of: $0)) when the person opened the fix to check it" } ?? "")")
+        }
         if let handoff = note.handoff {
             lines.append("  Sent to: \(handoff.agent), \(handoff.delivered.map { "handed over \(age(of: $0))" } ?? "waiting for \(handoff.agent) to listen")")
         }
         if let resolution = note.resolution {
             lines.append("  Resolved: \(age(of: resolution.at))\(resolution.summary.map { ", \($0)" } ?? "")")
+            if note.awaitsCheck {
+                lines.append("  Checked: not yet, the person has not looked at the fix")
+            } else if note.history.last?.kind == .confirmed {
+                lines.append("  Checked: the person looked at the fix and it is right")
+            }
+        } else if let reopening = note.lastReopening {
+            let reopened = reopening.reopened
+            var line = "  Reopened: \(age(of: reopened.at))\(reopened.text.map { ", \($0)" } ?? ", no reason given")"
+            if let undid = reopening.undid { line += ". The fix that did not hold: \(undid.text ?? "no summary")" }
+            lines.append(line)
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// Every edit, resolution and reopening, oldest first.
+    public func history(_ note: Note) -> [String] {
+        note.history.map { event in
+            let text = event.text.map { $0.replacingOccurrences(of: "\n", with: " ") }
+            switch event.kind {
+            case .edited: return "    \(age(of: event.at)): edited. It used to say: \(text ?? "")"
+            case .resolved: return "    \(age(of: event.at)): resolved\(text.map { ", \($0)" } ?? "")"
+            case .reopened: return "    \(age(of: event.at)): reopened\(text.map { ", \($0)" } ?? "")"
+            case .confirmed: return "    \(age(of: event.at)): the person checked the fix and it is right"
+            }
+        }
     }
 
     public func detail(_ note: Note) -> String {
@@ -57,6 +83,10 @@ public struct NoteFormatter: Sendable {
         let version = [note.app.version, note.app.build.map { "(\($0))" }].compactMap { $0 }.joined(separator: " ")
         lines.append("  App: \(note.app.name)\(version.isEmpty ? "" : " \(version)")\(note.app.bundleID.map { ", \($0)" } ?? "")")
         lines.append("  Window: “\(note.window.title)”, \(format(note.window.size.width)) × \(format(note.window.size.height)) points at \(format(note.window.scale))x")
+        if !note.history.isEmpty {
+            lines.append("  History:")
+            lines += history(note)
+        }
         return lines.joined(separator: "\n")
     }
 

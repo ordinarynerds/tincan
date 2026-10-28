@@ -128,6 +128,21 @@ struct MCPServerTests {
         #expect(try store.note(matching: "k3f9").status == .open)
     }
 
+    @Test("reopening takes a reason, the list says why a note came back, and the note shows its history")
+    func reopening() throws {
+        try store.save(NoteStoreTests.note("20260101-000000-k3f9"))
+        try store.save(NoteStoreTests.note("20260101-000001-m4n5", at: 1))
+        _ = try call("tincan_resolve_note", ["id": "k3f9", "summary": "Widened the column"])
+        _ = try call("tincan_reopen_note", ["id": "k3f9", "reason": "Still clipped"])
+        let list = try call("tincan_list_notes")
+        let notes = try #require((list["structuredContent"] as? [String: Any])?["notes"] as? [[String: Any]])
+        #expect(notes.first { $0["id"] as? String == "20260101-000000-k3f9" }?["reopened_because"] as? String == "Still clipped")
+        #expect(notes.first { $0["id"] as? String == "20260101-000001-m4n5" }?["reopened_because"] is NSNull)
+        let detail = texts(try call("tincan_get_note", ["id": "k3f9", "include_images": false]))[0]
+        #expect(detail.contains("The fix that did not hold: Widened the column"))
+        #expect(detail.contains("History:"))
+    }
+
     @Test("serving reads one message per line, skips blank lines, and answers garbage with a parse error")
     func serving() throws {
         var input = [

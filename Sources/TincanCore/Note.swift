@@ -5,7 +5,7 @@ import Foundation
 /// A note is written by the app and read by an agent. Every field is plain data so that a note
 /// survives being opened by a different tool, a different version of Tincan, or a person with `cat`.
 public struct Note: Codable, Equatable, Sendable, Identifiable {
-    public static let schemaVersion = 1
+    public static let schemaVersion = 2
 
     public var schema: Int
     public var id: String
@@ -20,11 +20,14 @@ public struct Note: Codable, Equatable, Sendable, Identifiable {
     public var resolution: Resolution?
     /// Set when the person sent the note to a listening agent to work on straight away.
     public var handoff: Handoff?
+    /// Every edit, resolution and reopening, oldest first, so a reopened note still says what was
+    /// tried and why it did not hold.
+    public var history: [Event]
 
     public init(
         id: String, created: Date, text: String, app: AppInfo, context: [String: String] = [:],
         window: WindowInfo, target: Target, images: Images = Images(), status: Status = .open,
-        resolution: Resolution? = nil, handoff: Handoff? = nil
+        resolution: Resolution? = nil, handoff: Handoff? = nil, history: [Event] = []
     ) {
         self.schema = Self.schemaVersion
         self.id = id
@@ -38,6 +41,7 @@ public struct Note: Codable, Equatable, Sendable, Identifiable {
         self.images = images
         self.resolution = resolution
         self.handoff = handoff
+        self.history = history
     }
 
     public enum Status: String, Codable, Sendable, CaseIterable {
@@ -135,6 +139,17 @@ public struct Note: Codable, Equatable, Sendable, Identifiable {
                 self.label = label
                 self.identifier = identifier
             }
+
+            /// Whether an element read now is this one. An identifier decides on its own; without
+            /// one, the role and the name have to agree.
+            public func matches(role: String?, name: String?, identifier: String?) -> Bool {
+                if let mine = self.identifier {
+                    guard mine == identifier else { return false }
+                    return self.role == nil || role == nil || self.role == role
+                }
+                guard let label, let mine = self.role else { return false }
+                return mine == role && label == name
+            }
         }
     }
 
@@ -143,10 +158,16 @@ public struct Note: Codable, Equatable, Sendable, Identifiable {
         public var element: String?
         /// The whole window with the target outlined.
         public var window: String?
+        /// The same spot as it looked when the person last opened the fix to check it.
+        public var after: String?
+        /// When the after picture was taken.
+        public var afterAt: Date?
 
-        public init(element: String? = nil, window: String? = nil) {
+        public init(element: String? = nil, window: String? = nil, after: String? = nil, afterAt: Date? = nil) {
             self.element = element
             self.window = window
+            self.after = after
+            self.afterAt = afterAt
         }
     }
 
@@ -171,6 +192,29 @@ public struct Note: Codable, Equatable, Sendable, Identifiable {
             self.agent = agent
             self.sent = sent
             self.delivered = delivered
+        }
+    }
+
+    public struct Event: Codable, Equatable, Sendable {
+        public enum Kind: String, Codable, Sendable {
+            /// The person rewrote the note. `text` is the wording it replaced.
+            case edited
+            /// Marked as handled. `text` is the summary of what changed.
+            case resolved
+            /// Marked open again. `text` is what is still wrong, when the person said.
+            case reopened
+            /// The person looked at the fix in the app and it is right.
+            case confirmed
+        }
+
+        public var kind: Kind
+        public var at: Date
+        public var text: String?
+
+        public init(kind: Kind, at: Date, text: String? = nil) {
+            self.kind = kind
+            self.at = at
+            self.text = text
         }
     }
 
@@ -199,7 +243,56 @@ public struct Note: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+extension Note {
+    /// Reads every schema so far. Schema 1 had no history.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schema = try container.decode(Int.self, forKey: .schema)
+        id = try container.decode(String.self, forKey: .id)
+        created = try container.decode(Date.self, forKey: .created)
+        status = try container.decode(Status.self, forKey: .status)
+        text = try container.decode(String.self, forKey: .text)
+        app = try container.decode(AppInfo.self, forKey: .app)
+        context = try container.decode([String: String].self, forKey: .context)
+        window = try container.decode(WindowInfo.self, forKey: .window)
+        target = try container.decode(Target.self, forKey: .target)
+        images = try container.decode(Images.self, forKey: .images)
+        resolution = try container.decodeIfPresent(Resolution.self, forKey: .resolution)
+        handoff = try container.decodeIfPresent(Handoff.self, forKey: .handoff)
+        history = try container.decodeIfPresent([Event].self, forKey: .history) ?? []
+    }
+
+    /// Resolved by an agent and not yet looked at by the person who left it.
+    public var awaitsCheck: Bool {
+        status == .resolved && history.last?.kind == .resolved
+    }
+
+    /// Whether the note was left where the app is now. `keys` names the context entries that make up
+    /// a place, such as a screen, and nil means all of them. A note with no context is everywhere.
+    public func isLeft(in context: [String: String], keys: Set<String>? = nil) -> Bool {
+        guard !self.context.isEmpty else { return true }
+        guard let keys else { return self.context == context }
+        return self.context.filter { keys.contains($0.key) } == context.filter { keys.contains($0.key) }
+    }
+
+    /// The latest reopening, and the resolution it undid, for a note that came back.
+    public var lastReopening: (reopened: Event, undid: Event?)? {
+        guard let index = history.lastIndex(where: { $0.kind == .reopened }) else { return nil }
+        let undid = history[..<index].last { $0.kind == .resolved }
+        return (history[index], undid)
+    }
+}
+
 extension Note.Element {
+    /// What to look for to find this element again after the window changed: the element itself,
+    /// or for a line of text read off the screen, which has no element of its own, the one holding it.
+    public var anchor: Ancestor? {
+        if role == nil, let holder = ancestors.first { return holder }
+        let name = [label, title, value].compactMap { $0 }.first { !$0.isEmpty }
+        guard identifier != nil || (role != nil && name != nil) else { return nil }
+        return Ancestor(role: role, label: name, identifier: identifier)
+    }
+
     /// The words a person would use for this element: `Button “Save”`.
     public var summary: String {
         let kind = roleDescription ?? role.map(Self.plainRole) ?? "Element"

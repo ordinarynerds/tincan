@@ -32,7 +32,7 @@ public struct Command {
         var values: [String: String] = [:]
     }
 
-    static let valueOptions: Set<String> = ["--dir", "-m", "--message", "--interval", "--as"]
+    static let valueOptions: Set<String> = ["--dir", "-m", "--message", "--interval", "--as", "--timeout"]
 
     static func parse(_ arguments: [String]) -> Options {
         var options = Options()
@@ -86,7 +86,16 @@ public struct Command {
                     summary: options.values["-m"] ?? options.values["--message"], at: now())
                 out("Resolved \(note.id)")
             case "reopen":
-                out("Reopened \(try store.reopen(try required(rest, "reopen <id>")).id)")
+                let note = try store.reopen(
+                    try required(rest, "reopen <id> [-m \"what is still wrong\"]"),
+                    reason: options.values["-m"] ?? options.values["--message"], at: now())
+                out("Reopened \(note.id)")
+            case "edit":
+                let id = try required(rest, "edit <id> -m \"what the note should say\"")
+                guard let text = options.values["-m"] ?? options.values["--message"] else {
+                    throw UsageError(usage: "edit <id> -m \"what the note should say\"")
+                }
+                out("Edited \(try store.edit(id, text: text, at: now()).id)")
             case "delete", "rm":
                 let id = try store.note(matching: try required(rest, "delete <id>")).id
                 try store.delete(id)
@@ -98,6 +107,8 @@ public struct Command {
                     store: store, json: json, interval: Double(options.values["--interval"] ?? "") ?? 1,
                     name: options.values["--as"] ?? environment["TINCAN_AGENT"] ?? "Agent",
                     once: options.flags.contains("--once"), all: options.flags.contains("--all"))
+            case "check":
+                return check(store: store, timeout: Double(options.values["--timeout"] ?? "") ?? 15)
             case "mcp":
                 MCPServer(store: store, now: now).serve()
             case "agents", "guide":
@@ -174,6 +185,28 @@ public struct Command {
         }
     }
 
+    /// Asks the running app that writes to this store to check its own windows, then prints the report
+    /// it writes. The app does the checking because only it can see what pointing at its windows returns.
+    func check(store: NoteStore, timeout: Double) -> Int32 {
+        let directory = store.directory.appendingPathComponent("checks", isDirectory: true)
+        let before = Set((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? [])
+        DistributedNotificationCenter.default().postNotificationName(
+            Notification.Name("com.ordinarynerds.tincan.check"), object: store.directory.standardizedFileURL.path,
+            userInfo: nil, deliverImmediately: true)
+        let deadline = Date().addingTimeInterval(max(1, timeout))
+        while Date() < deadline {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+            if let fresh = names.filter({ !before.contains($0) && $0.hasSuffix(".md") }).sorted().last,
+               let text = try? String(contentsOf: directory.appendingPathComponent(fresh), encoding: .utf8) {
+                out(text)
+                return 0
+            }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        err("No app answered within \(Int(timeout)) s. The app has to be running with Tincan installed and writing to \(store.directory.path).")
+        return 1
+    }
+
     func emit(_ note: Note, store: NoteStore, json: Bool) {
         if json, let line = try? jsonLine(note) {
             out(line)
@@ -190,10 +223,15 @@ public struct Command {
           tincan list [--all | --resolved] [--json]   Open notes, oldest first
           tincan show <id> [--json]                   Everything about one note
           tincan resolve <id> [-m "what changed"]     Mark a note as handled
-          tincan reopen <id>                          Mark it open again
+          tincan reopen <id> [-m "what is still wrong"]
+                                                      Mark it open again, saying why
+          tincan edit <id> -m "new words"             Rewrite a note; the old words stay in its history
           tincan delete <id>                          Remove a note and its images
           tincan watch --as <name> [--once] [--all] [--json]
                                                       Listen as an agent: print notes sent to <name>
+          tincan check [--timeout <s>]                Have the running app check its windows: what
+                                                      can't be pointed at, unnamed controls, elements
+                                                      that swallow their contents
           tincan path                                 Where notes are stored
           tincan agents                               How an agent should work through notes
           tincan mcp                                  Serve the notes to an agent over MCP (stdio)

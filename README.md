@@ -16,7 +16,7 @@ Paste this into Claude Code, Codex, Cursor or any coding agent, from the root of
 Set up Tincan (https://github.com/ordinarynerds/tincan) in this macOS app, so I can point at things in
 the running debug build and leave notes that you then fix. Do every step, then tell me what you did.
 
-1. Add the Swift package https://github.com/ordinarynerds/tincan, from version 0.1.0, and link its
+1. Add the Swift package https://github.com/ordinarynerds/tincan, from version 0.2.0, and link its
    `Tincan` library to the app target.
    - Package.swift: add it to `dependencies` and the product to the app target.
    - XcodeGen (project.yml) or Tuist: add it there and regenerate the project.
@@ -48,7 +48,7 @@ the running debug build and leave notes that you then fix. Do every step, then t
 
        git clone --depth 1 https://github.com/ordinarynerds/tincan /tmp/tincan-src
        swift build -c release --product tincan --package-path /tmp/tincan-src
-       mkdir -p ~/.local/bin && cp /tmp/tincan-src/.build/release/tincan ~/.local/bin/
+       mkdir -p ~/.local/bin && rm -f ~/.local/bin/tincan && cp /tmp/tincan-src/.build/release/tincan ~/.local/bin/
 
    Make sure `tincan help` runs (add ~/.local/bin to PATH if it does not).
 
@@ -84,7 +84,7 @@ Work through my Tincan notes.
 Add the package in Xcode (File > Add Package Dependencies) or in `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/ordinarynerds/tincan", from: "0.1.0")
+.package(url: "https://github.com/ordinarynerds/tincan", from: "0.2.0")
 ```
 
 Link the `Tincan` library to your app target and install it at launch, in debug builds only:
@@ -109,7 +109,7 @@ Install the command for your agent:
 
 ```sh
 swift build -c release --product tincan
-cp .build/release/tincan /usr/local/bin/
+rm -f /usr/local/bin/tincan && cp .build/release/tincan /usr/local/bin/
 ```
 
 ## Leaving notes
@@ -126,16 +126,44 @@ Everything works with the pointer alone, from a small bar that floats above the 
 | | |
 |---|---|
 | ⌃⌥⌘T | Start or stop review mode |
-| Hover | Outlines the element under the pointer and names it |
-| Click | Note on that element |
+| Hover | Outlines the element under the pointer and names it, down to a line of text inside a button |
+| ↑ ↓ | Step out to the parent, or back in to the child, from the innermost element to the outermost |
+| Click | Note on the outlined element |
 | Drag | Note on a region, for things that are not one element: spacing, alignment, a whole layout |
+| Click a pin | Open its note: rewrite it, resolve it, reopen it or delete it |
+| Tab, Return | Step through the pins on the window, and open the one chosen |
 | Hold ⌥ | Use the app normally while review mode stays on |
 | ⌘↩ | Save the note |
 | Esc | Cancel the note, or leave review mode |
 
-The note sheet has two switches: a screenshot of the element (or region) with a margin around it, and the whole window with the target outlined. Your choice is remembered.
+The note sheet leads with the picture of what you pointed at, exactly as it will be saved, with the whole window as a small chip beside its checkbox. Uncheck either to leave it out; your choice is remembered. There is no Cancel button: Esc, or a click outside a sheet you have not typed in, closes it. Words in a sheet you cancel are kept, and the next sheet on the same spot opens with them, or offers them back.
 
-Notes already left show as numbered pins. Hover a pin to read it; click it to copy its id, resolve it or delete it.
+Notes already left show as numbered pins. Hover a pin to read it. Click it to open the note in the same sheet, where you can rewrite it, resolve it or delete it; the old words stay in the note's history. Right-click a pin for the rest: copy its id or a `tincan show` line for your agent, or send it to a listening agent.
+
+Pins follow what they point at. A note remembers its element's identifier, or its role and name, and finds it again when the window scrolls, resizes or reflows. A pin whose element is gone is drawn hollow and says so. Pins show only on the screen they were left on: pass `placeKeys` to say which context entries make a screen, such as `["screen"]`.
+
+### Checking fixes
+
+When an agent resolves a note, it waits for you as a **fix to check**: a green pin, and **Check N** in the floating bar. Check steps through each fix at its pin, photographs the spot as it is now, and shows it beside the picture you left and what the agent said it changed. **Looks Right** confirms it; **Still Wrong…** asks what is still wrong and reopens the note, and the agent sees the fix that did not hold and your words.
+
+Give Tincan a way to reach a screen, and checking a fix, or choosing a note in the list, takes you to the screen it was left on:
+
+```swift
+Tincan.install(Tincan.Configuration(
+    placeKeys: ["screen"],
+    context: { ["screen": model.screen.rawValue] },
+    navigate: { context in
+        guard let screen = context["screen"].flatMap(Screen.init(rawValue:)) else { return false }
+        model.go(to: screen)
+        return true
+    }))
+```
+
+### The notes list
+
+The notes button in the floating bar, or a click on the menu bar switch, opens every note in one list: **Open**, **To Check** and **Resolved**, each row with its picture, its words, where it is and which agent has it. Click a row to go to its pin; right-click it for everything else. While an agent works on a note, its pin pulses; while a note waits for an agent to pick it up, its pin has a dashed ring. Right-click the menu bar switch for the same reach as a menu.
+
+Turn on **Show Resolved Pins** in the list's ⋯ menu to see resolved notes too, in grey with a check. Click one to read what the agent changed, say what is still wrong, and reopen it. The agent sees the fix that did not hold and your reason, so it does not try the same thing twice. The Resolved tab of the list does the same without finding the pin.
 
 A pin in the menu bar shows whether review mode is on (filled orange) and how many notes are open. Its menu starts and stops review mode, lists the latest open notes (choose one to copy its id), copies `tincan list` for your agent, and shows the notes folder in Finder. Turn it off with `Tincan.Configuration(showsStatusItem: false)`.
 
@@ -147,9 +175,11 @@ The floating bar sits centred below the menu bar until you drag it somewhere els
 tincan list                       # open notes, oldest first
 tincan show <id>                  # every field, with absolute paths to the images
 tincan resolve <id> -m "Widened the size column so 0.1 GB of 15 GB fits"
-tincan reopen <id>                # the fix did not hold
+tincan reopen <id> -m "Still clipped at 200%"   # the fix did not hold, and why
+tincan edit <id> -m "new words"   # rewrite a note; the old words stay in its history
 tincan delete <id>                # remove a note and its images
 tincan path                       # where notes are stored
+tincan check                      # have the running app check its windows (below)
 tincan watch --as Claude          # listen: print each note sent to Claude as it arrives
 tincan watch --as Claude --once   # the same, but stop after handing over one note
 tincan mcp                        # serve the notes over MCP (below)
@@ -157,6 +187,11 @@ tincan agents                     # the instructions below, for your agent's con
 ```
 
 An id can be shortened to any unique start or end, so `tincan show k3f9` works.
+
+`tincan check` asks the running app to check its own windows and prints what it finds: elements that
+can't be pointed at (and what answers instead), controls with no name (and the text inside them
+that could be one), and single elements that cover a large part of the window. These are the places
+where a note can only be a spot, and where VoiceOver has the same trouble.
 
 ### Sending a note to an agent that is listening
 
@@ -177,9 +212,9 @@ Any MCP client works the same way: the command is `tincan mcp`, run from inside 
 | Tool | Does |
 |---|---|
 | `tincan_list_notes` | Open notes, oldest first. `status` (open, resolved, all), `limit`, `offset` |
-| `tincan_get_note` | One note, with the element and window screenshots attached as images |
+| `tincan_get_note` | One note, with the element, window and after-the-fix screenshots attached as images |
 | `tincan_resolve_note` | Mark it handled, with a one-line `summary` the person will read |
-| `tincan_reopen_note` | Mark it open again |
+| `tincan_reopen_note` | Mark it open again, with an optional `reason` |
 
 Deleting stays in the command line and the app, so an agent cannot throw a note away.
 

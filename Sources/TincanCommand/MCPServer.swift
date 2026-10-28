@@ -17,7 +17,7 @@ public struct MCPServer {
     }
 
     static let supportedVersions = ["2025-06-18", "2025-03-26", "2024-11-05"]
-    static let version = "0.1.0"
+    static let version = "0.2.0"
 
     public func serve(
         readLine: () -> String? = { Swift.readLine(strippingNewline: true) },
@@ -82,7 +82,8 @@ public struct MCPServer {
                 let note = try store.resolve(try Self.id(arguments), summary: summary, at: now())
                 return Self.text("Resolved \(note.id). Its pin leaves the app on the next refresh.")
             case "tincan_reopen_note":
-                return Self.text("Reopened \(try store.reopen(try Self.id(arguments)).id).")
+                let note = try store.reopen(try Self.id(arguments), reason: arguments["reason"] as? String, at: now())
+                return Self.text("Reopened \(note.id).")
             default:
                 return Self.failure("Unknown tool \(name).")
             }
@@ -135,10 +136,19 @@ public struct MCPServer {
                     "target": note.target.summary, "window": note.window.title,
                     "created": ISO8601DateFormatter().string(from: note.created),
                     "sent_to": note.handoff?.agent ?? NSNull(),
+                    "reopened_because": Self.reopenedBecause(note),
+                    "awaiting_check": note.awaitsCheck,
                 ] as [String: Any]
             },
         ]
         return ["content": [["type": "text", "text": text]], "structuredContent": structured]
+    }
+
+    /// Why an open note came back, an empty string when the person gave no reason, or null for a
+    /// note that was never reopened.
+    static func reopenedBecause(_ note: Note) -> Any {
+        guard note.status == .open, let reopening = note.lastReopening else { return NSNull() }
+        return reopening.reopened.text ?? ""
     }
 
     func get(_ arguments: [String: Any]) throws -> [String: Any] {
@@ -149,6 +159,7 @@ public struct MCPServer {
             for (caption, name, edge) in [
                 ("Element, as the person saw it:", note.images.element, 1200),
                 ("Whole window, target outlined:", note.images.window, 1600),
+                ("The same spot as it looked when the person opened the fix to check it:", note.images.after, 1200),
             ] {
                 guard let url = store.imageURL(name), let png = Self.png(url, maxEdge: edge) else { continue }
                 content.append(["type": "text", "text": caption])
@@ -202,7 +213,8 @@ public struct MCPServer {
         Tincan holds notes a person left on a running macOS app by pointing at it. Each note names the \
         element (accessibility role, label, value, identifier), the view class, where it sits in the \
         window, the app's context such as the current screen, and screenshots. Work oldest first: \
-        tincan_get_note shows the screenshots; search the code for the identifier, then the label text \
+        tincan_get_note shows the screenshots and the note's history. A reopened note lists the fix \
+        that did not hold and why, so do not repeat it; search the code for the identifier, then the label text \
         (also in string catalogs), then the view class. Fix what the note means, rebuild, look at the \
         result, then tincan_resolve_note with one line on what changed. Ask the person when a note is unclear.
         """
@@ -258,9 +270,16 @@ public struct MCPServer {
         [
             "name": "tincan_reopen_note",
             "title": "Reopen a Tincan note",
-            "description": "Mark a resolved note as open again, when the fix did not hold.",
-            "inputSchema": ["type": "object", "properties": ["id": idProperty], "required": ["id"]],
-            "annotations": ["readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false],
+            "description": "Mark a resolved note as open again, when the fix did not hold. The earlier resolution stays in the note's history.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "id": idProperty,
+                    "reason": ["type": "string", "description": "What is still wrong, such as \"Still clipped at the largest text size\"."],
+                ],
+                "required": ["id"],
+            ],
+            "annotations": ["readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false],
         ],
     ] }
 }

@@ -92,6 +92,29 @@ struct CommandTests {
         #expect(run("list", "--resolved").out.contains("Resolved: just now, Widened the column"))
     }
 
+    @Test("reopen takes a reason, and list then says what came back and which fix did not hold")
+    func reopen() throws {
+        try seed()
+        _ = run("resolve", "bbbb", "-m", "Widened the column")
+        #expect(run("reopen", "bbbb", "-m", "Still clipped").out == "Reopened 20260101-000001-bbbb")
+        let list = run("list").out
+        #expect(list.contains("Reopened: just now, Still clipped. The fix that did not hold: Widened the column"))
+        let show = run("show", "bbbb").out
+        #expect(show.contains("History:"))
+        #expect(show.contains("resolved, Widened the column"))
+        #expect(show.contains("reopened, Still clipped"))
+    }
+
+    @Test("edit rewrites the note and keeps the old words, and needs the new ones")
+    func edit() throws {
+        try seed()
+        #expect(run("edit", "bbbb", "-m", "The label is cut off at 200%").out == "Edited 20260101-000001-bbbb")
+        #expect(run("list").out.contains("Note: The label is cut off at 200%"))
+        #expect(run("show", "bbbb").out.contains("edited. It used to say: The label is cut off"))
+        #expect(run("edit", "bbbb").code == 64)
+        #expect(run("edit", "bbbb", "-m", " ").code == 1)
+    }
+
     @Test("--json prints one parseable note per line")
     func json() throws {
         try seed()

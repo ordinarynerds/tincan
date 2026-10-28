@@ -17,9 +17,11 @@ public struct NoteStore: Sendable {
     public enum StoreError: Error, Equatable, CustomStringConvertible {
         case notFound(String)
         case ambiguous(String, [String])
+        case emptyText
 
         public var description: String {
             switch self {
+            case .emptyText: "A note needs words. Delete it instead if nothing should change."
             case .notFound(let id): "No note matches “\(id)”."
             case .ambiguous(let id, let matches):
                 "“\(id)” matches \(matches.count) notes: \(matches.joined(separator: ", "))."
@@ -90,25 +92,90 @@ public struct NoteStore: Sendable {
     @discardableResult
     public func resolve(_ query: String, summary: String?, at date: Date = Date()) throws -> Note {
         var note = try note(matching: query)
+        let summary = Self.trimmed(summary)
         note.status = .resolved
         note.resolution = Note.Resolution(at: date, summary: summary)
+        note.history.append(Note.Event(kind: .resolved, at: date, text: summary))
         try write(note)
         return note
     }
 
+    /// Opens the note again. Its resolution moves into the history rather than vanishing, so whoever
+    /// picks it up next sees what was tried, and `reason` says why it did not hold.
     @discardableResult
-    public func reopen(_ query: String) throws -> Note {
+    public func reopen(_ query: String, reason: String? = nil, at date: Date = Date()) throws -> Note {
         var note = try note(matching: query)
+        if let resolution = note.resolution, note.history.last?.kind != .resolved {
+            note.history.append(Note.Event(kind: .resolved, at: resolution.at, text: resolution.summary))
+        }
         note.status = .open
         note.resolution = nil
+        note.history.append(Note.Event(kind: .reopened, at: date, text: Self.trimmed(reason)))
         try write(note)
         return note
+    }
+
+    /// Rewrites what the note says, keeping the old wording in the history. Writing the same words
+    /// again changes nothing.
+    @discardableResult
+    public func edit(_ query: String, text: String, at date: Date = Date()) throws -> Note {
+        var note = try note(matching: query)
+        guard let text = Self.trimmed(text) else { throw StoreError.emptyText }
+        guard text != note.text else { return note }
+        note.history.append(Note.Event(kind: .edited, at: date, text: note.text))
+        note.text = text
+        try write(note)
+        return note
+    }
+
+    /// Queues the note for a listening agent, again if it already had it, so an edited or reopened
+    /// note reaches the agent the way a new one does.
+    @discardableResult
+    public func send(_ query: String, to agent: String, at date: Date = Date()) throws -> Note {
+        var note = try note(matching: query)
+        note.handoff = Note.Handoff(agent: agent, sent: date)
+        try write(note)
+        return note
+    }
+
+    /// The person looked at the fix in the app and it is right. The note stays resolved and stops
+    /// asking to be checked.
+    @discardableResult
+    public func confirm(_ query: String, at date: Date = Date()) throws -> Note {
+        var note = try note(matching: query)
+        guard note.status == .resolved else { return note }
+        note.history.append(Note.Event(kind: .confirmed, at: date))
+        try write(note)
+        return note
+    }
+
+    /// Saves the picture the app took of the same spot after the fix, replacing an older one.
+    @discardableResult
+    public func attachAfter(_ query: String, image: Data, at date: Date = Date()) throws -> Note {
+        try prepare()
+        var note = try note(matching: query)
+        let name = "\(note.id)-after.png"
+        try image.write(to: imagesDirectory.appendingPathComponent(name), options: .atomic)
+        note.images.after = name
+        note.images.afterAt = date
+        try write(note)
+        return note
+    }
+
+    /// Fixes an agent made that the person has not looked at yet, oldest fix first.
+    public func fixesToCheck() -> [Note] {
+        all().filter(\.awaitsCheck).sorted { ($0.resolution?.at ?? $0.created) < ($1.resolution?.at ?? $1.created) }
+    }
+
+    static func trimmed(_ text: String?) -> String? {
+        guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        return text
     }
 
     public func delete(_ query: String) throws {
         let note = try note(matching: query)
         let fileManager = FileManager.default
-        for name in [note.images.element, note.images.window].compactMap({ $0 }) {
+        for name in [note.images.element, note.images.window, note.images.after].compactMap({ $0 }) {
             try? fileManager.removeItem(at: imagesDirectory.appendingPathComponent(name))
         }
         try fileManager.removeItem(at: url(of: note.id))

@@ -79,11 +79,10 @@ final class FloatingBar {
         }
     }
 
-    func popUpNotes() {
-        let menu = NSMenu()
-        NotesMenu.populate(menu, store: store, shortcut: shortcut)
-        let below = CGPoint(x: hosting.bounds.maxX - 40, y: hosting.isFlipped ? hosting.bounds.maxY + 4 : -4)
-        menu.popUp(positioning: nil, at: below, in: hosting)
+    /// Opens the notes list below the bar, or above it when the bar sits low on the screen.
+    func showNotes() {
+        let low = panel.frame.minY < (panel.screen?.visibleFrame.midY ?? 0)
+        NotesPanel.toggle(relativeTo: hosting.bounds, of: hosting, edge: low ? .maxY : .minY)
     }
 
     private func restorePosition() {

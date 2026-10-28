@@ -25,10 +25,22 @@ the app's own context (such as the current screen), and screenshots.
 
 Leave a note open and ask the person when it is ambiguous or conflicts with an earlier decision.
 
+A reopened note shows `Reopened:` with the person's reason and the fix that did not hold, and
+`tincan show` lists its whole history. Read both before starting: the obvious fix was already tried.
+If you reopen a note yourself, say why: `tincan reopen <id> -m "<what is still wrong>"`.
+
+After you resolve a note, the person checks your fix in place, and the app photographs the same spot
+as they open it. `tincan show` then lists an `After image:` and a `Checked:` line. A note they
+reopen comes back with both, so compare the before and after pictures to see what your fix did.
+
 To take notes while the person is still reviewing, listen under your own name, for example
 `tincan watch --as Claude --once --json`, as a background command. The app then shows "Send to
 Claude now" on each note. When the command prints a note and exits, work it as above, then start it
 again. Notes sent while you work queue up and are handed over in order.
+
+When a note says something can't be selected, or before fixing accessibility, run `tincan check`
+with the app running: it lists elements that can't be pointed at, controls with no name, and
+elements that swallow their contents, with where each one is.
 
 If the `tincan_*` MCP tools are available, use them instead of the command: `tincan_list_notes`,
 then `tincan_get_note` (it attaches both screenshots as images), then `tincan_resolve_note` with the

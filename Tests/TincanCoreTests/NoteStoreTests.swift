@@ -77,6 +77,60 @@ struct NoteStoreTests {
         #expect(images.isEmpty)
     }
 
+    @Test("reopening keeps the fix that did not hold in the history, with the reason it came back")
+    func reopenKeepsHistory() throws {
+        try store.save(Self.note("20260101-000001-bbbb"))
+        try store.resolve("bbbb", summary: "  Widened the column  ", at: Date(timeIntervalSince1970: 10))
+        let reopened = try store.reopen("bbbb", reason: "Still clipped at the largest text size", at: Date(timeIntervalSince1970: 20))
+        #expect(reopened.history.map(\.kind) == [.resolved, .reopened])
+        #expect(reopened.lastReopening?.undid?.text == "Widened the column")
+        #expect(reopened.lastReopening?.reopened.text == "Still clipped at the largest text size")
+        #expect(try store.reopen("bbbb", reason: "   ").history.last?.text == nil)
+    }
+
+    @Test("a note resolved before notes had a history still keeps its fix when reopened")
+    func reopenLegacyResolution() throws {
+        var note = Self.note("20260101-000001-bbbb")
+        note.status = .resolved
+        note.resolution = .init(at: Date(timeIntervalSince1970: 5), summary: "Old fix")
+        try store.write(note)
+        let reopened = try store.reopen("bbbb")
+        #expect(reopened.history.first == Note.Event(kind: .resolved, at: Date(timeIntervalSince1970: 5), text: "Old fix"))
+    }
+
+    @Test("editing keeps the old words in the history, the same words change nothing, and no words is refused")
+    func edit() throws {
+        try store.save(Self.note("20260101-000001-bbbb", text: "Too tight"))
+        let edited = try store.edit("bbbb", text: " The size column cuts off 0.1 GB \n")
+        #expect(edited.text == "The size column cuts off 0.1 GB")
+        #expect(edited.history == [Note.Event(kind: .edited, at: try #require(edited.history.first?.at), text: "Too tight")])
+        #expect(try store.edit("bbbb", text: "The size column cuts off 0.1 GB").history.count == 1)
+        #expect(throws: NoteStore.StoreError.emptyText) { try store.edit("bbbb", text: "  ") }
+    }
+
+    @Test("sending a note again queues it for the agent even after it was handed over")
+    func sendAgain() throws {
+        try store.save(Self.note("20260101-000001-bbbb"))
+        try store.send("bbbb", to: "Claude")
+        try store.markDelivered("bbbb")
+        #expect(store.pendingHandoffs(for: "claude").isEmpty)
+        try store.send("bbbb", to: "Claude")
+        #expect(store.pendingHandoffs(for: "Claude").map(\.id) == ["20260101-000001-bbbb"])
+    }
+
+    @Test("a schema 1 note, written before history existed, still reads, with an empty history")
+    func readsSchemaOne() throws {
+        var json = try JSONSerialization.jsonObject(with: NoteStore.encoder.encode(Self.note("20260101-000001-bbbb"))) as? [String: Any] ?? [:]
+        json["schema"] = 1
+        json.removeValue(forKey: "history")
+        try store.prepare()
+        try JSONSerialization.data(withJSONObject: json).write(to: store.notesDirectory.appendingPathComponent("20260101-000001-bbbb.json"))
+        let note = try store.note(matching: "bbbb")
+        #expect(note.schema == 1)
+        #expect(note.history.isEmpty)
+        #expect(try store.edit("bbbb", text: "New words").history.count == 1)
+    }
+
     @Test("a file that is not a note is skipped instead of breaking the list")
     func skipsGarbage() throws {
         try store.save(Self.note("20260101-000001-bbbb"))
