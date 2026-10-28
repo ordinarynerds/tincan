@@ -7,6 +7,15 @@ import TincanCore
 enum NotesMenu {
     static let visibleNotes = 8
 
+    static func listening(_ listeners: [Listener]) -> String {
+        let names = listeners.map(\.name)
+        switch names.count {
+        case 0: return "No agent is listening"
+        case 1: return "\(names[0]) is listening"
+        default: return "\(names.dropLast().joined(separator: ", ")) and \(names[names.count - 1]) are listening"
+        }
+    }
+
     static func populate(_ menu: NSMenu, store: NoteStore, shortcut: Tincan.Shortcut?) {
         menu.removeAllItems()
         let toggle = ActionItem(Tincan.isActive ? "Stop Review Mode" : "Start Review Mode") { Tincan.toggle() }
@@ -15,6 +24,11 @@ enum NotesMenu {
             toggle.keyEquivalentModifierMask = shortcut.modifiers
         }
         menu.addItem(toggle)
+        menu.addItem(.separator())
+        let listening = NSMenuItem(title: Self.listening(store.listeners(at: Date())), action: nil, keyEquivalent: "")
+        listening.isEnabled = false
+        listening.toolTip = "An agent listens by running `tincan watch --as <its name>`. Notes can be sent to it from the note sheet."
+        menu.addItem(listening)
         menu.addItem(.separator())
         let open = store.notes(status: .open)
         let header = NSMenuItem(

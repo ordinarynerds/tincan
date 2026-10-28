@@ -21,8 +21,10 @@ public enum AgentGuide {
         If a note is unclear, or asks for something that conflicts with another decision, leave it open
         and ask the person instead of guessing.
 
-        To keep working while the person is still leaving notes, run `tincan watch` in the background
-        and handle each note as it arrives.
+        To take notes while the person is still reviewing, listen under your name:
+        `tincan watch --as <your name> --once --json` in the background. The app then offers
+        "Send to <your name> now" on each note. When the command prints a note and exits, work it as
+        above, then start the command again. Notes sent while you work wait for you, in order.
 
         If the `tincan_*` MCP tools are available, use them instead: `tincan_list_notes`, then
         `tincan_get_note`, which attaches the screenshots as images, then `tincan_resolve_note` with the

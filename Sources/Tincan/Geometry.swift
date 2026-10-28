@@ -36,6 +36,15 @@ enum Geometry {
         return (overlap.width * overlap.height) / (windowFrame.width * windowFrame.height) > 0.6
     }
 
+    /// The square a click notes when nothing accessible is under it, kept inside the window.
+    static func spot(around point: CGPoint, side: CGFloat = 48, within size: CGSize) -> CGRect {
+        let side = min(side, size.width, size.height)
+        return CGRect(
+            x: min(max(point.x - side / 2, 0), size.width - side),
+            y: min(max(point.y - side / 2, 0), size.height - side),
+            width: side, height: side)
+    }
+
     static func rect(_ rect: CGRect) -> Note.Rect {
         Note.Rect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height)
     }

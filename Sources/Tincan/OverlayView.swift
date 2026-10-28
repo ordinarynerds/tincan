@@ -16,6 +16,8 @@ final class OverlayView: NSView {
     struct Highlight: Equatable {
         var rect: CGRect
         var label: String
+        /// No element is here, so the rect is the spot a click would note, drawn dashed.
+        var isSpot = false
     }
 
     struct Pin: Equatable {
@@ -111,10 +113,12 @@ final class OverlayView: NSView {
         let accent = Style.accent
         if let rect = pinned ?? dragRect ?? highlight?.rect {
             let path = NSBezierPath(roundedRect: rect.insetBy(dx: -2, dy: -2), xRadius: 4, yRadius: 4)
-            accent.withAlphaComponent(0.12).setFill()
+            let isSpot = pinned == nil && dragRect == nil && highlight?.isSpot == true
+            accent.withAlphaComponent(isSpot ? 0.06 : 0.12).setFill()
             path.fill()
             accent.setStroke()
             path.lineWidth = 2
+            if isSpot { path.setLineDash([5, 3], count: 2, phase: 0) }
             path.stroke()
         }
         if pinned == nil, dragRect == nil, let highlight {

@@ -134,6 +134,7 @@ public struct MCPServer {
                     "id": note.id, "status": note.status.rawValue, "text": note.text,
                     "target": note.target.summary, "window": note.window.title,
                     "created": ISO8601DateFormatter().string(from: note.created),
+                    "sent_to": note.handoff?.agent ?? NSNull(),
                 ] as [String: Any]
             },
         ]

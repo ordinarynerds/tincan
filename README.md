@@ -150,12 +150,19 @@ tincan resolve <id> -m "Widened the size column so 0.1 GB of 15 GB fits"
 tincan reopen <id>                # the fix did not hold
 tincan delete <id>                # remove a note and its images
 tincan path                       # where notes are stored
-tincan watch                      # print new notes as they arrive
+tincan watch --as Claude          # listen: print each note sent to Claude as it arrives
+tincan watch --as Claude --once   # the same, but stop after handing over one note
 tincan mcp                        # serve the notes over MCP (below)
 tincan agents                     # the instructions below, for your agent's context
 ```
 
 An id can be shortened to any unique start or end, so `tincan show k3f9` works.
+
+### Sending a note to an agent that is listening
+
+While an agent runs `tincan watch --as Claude`, the note sheet offers **Send to Claude now**. Check it and the note goes straight to the agent, which starts on it while you keep reviewing. Leave it unchecked and the note waits until you ask for your notes. With nobody listening, the switch is there but off, and says how to start a listener; with several, it becomes a "Send now to" picker.
+
+`watch` keeps a small file in `.tincan/listeners/` fresh while it runs, which is how the sheet knows who is listening. A note sent while the agent is busy waits in a queue and is handed over the next time it listens, so nothing sent is lost. An agent that is told when a background command finishes, rather than when it prints, should use `--once` and start it again after each note.
 
 ### Over MCP
 

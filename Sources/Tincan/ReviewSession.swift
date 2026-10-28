@@ -26,6 +26,7 @@ final class ReviewSession: NSObject {
 
     static let instructions =
         "Click something, or drag across a region, to leave a note. Hold ⌥ or choose Use App to use the app. Esc or Done to finish."
+    static let spotLabel = "No element here. Click to note this spot, or drag around it."
     static let usingAppInstructions = "Clicks reach the app. Choose Leave Notes in the Tincan bar to point at things again."
 
     /// Clicks go to the app while ⌥ is held or Use App is chosen, but never while a note is open,
@@ -211,13 +212,18 @@ final class ReviewSession: NSObject {
             Tincan.composingChanged(false)
             self?.applyPassThrough()
         }
+        let listeners = store.listeners(at: Date())
+        let lastSent = defaults.string(forKey: "TincanSendTo")
         let composer = Composer(
             title: target.summary, isRegion: target.kind == .region, canAttach: shot != nil,
             attachElement: defaults.object(forKey: "TincanAttachElement") as? Bool ?? true,
             attachWindow: defaults.object(forKey: "TincanAttachWindow") as? Bool ?? true,
+            listeners: listeners,
+            sendTo: listeners.first { $0.name.caseInsensitiveCompare(lastSent ?? "") == .orderedSame }?.name,
             save: { [weak self] draft in
                 defaults.set(draft.attachElement, forKey: "TincanAttachElement")
                 defaults.set(draft.attachWindow, forKey: "TincanAttachWindow")
+                if listeners.isEmpty == false { defaults.set(draft.sendTo, forKey: "TincanSendTo") }
                 self?.save(draft, window: window, overlay: overlay, rect: rect, target: target, shot: shot)
                 close()
             },
@@ -234,9 +240,10 @@ final class ReviewSession: NSObject {
         target: Note.Target, shot: WindowCapture.Shot?
     ) {
         let info = Bundle.main.infoDictionary ?? [:]
+        let now = Date()
         let note = Note(
-            id: NoteStore.makeID(),
-            created: Date(),
+            id: NoteStore.makeID(at: now),
+            created: now,
             text: draft.text,
             app: Note.AppInfo(
                 bundleID: Bundle.main.bundleIdentifier,
@@ -248,12 +255,14 @@ final class ReviewSession: NSObject {
                 title: window.title, identifier: window.identifier?.rawValue,
                 size: Note.Size(width: window.frame.width, height: window.frame.height),
                 scale: Double(shot?.scale ?? window.backingScaleFactor)),
-            target: target)
+            target: target,
+            handoff: draft.sendTo.map { Note.Handoff(agent: $0, sent: now) })
         let element = draft.attachElement ? shot.flatMap { WindowCapture.crop($0, to: rect) }.flatMap(WindowCapture.png) : nil
         let whole = draft.attachWindow ? shot.flatMap { WindowCapture.outlined($0, rect: rect) }.flatMap(WindowCapture.png) : nil
         do {
             let saved = try store.save(note, elementImage: element, windowImage: whole)
-            say("Saved note \(saved.id). Run `tincan list` to see it.", on: overlay)
+            say(saved.handoff.map { "Sent to \($0.agent): note \(saved.id)." }
+                ?? "Saved note \(saved.id). Run `tincan list` to see it.", on: overlay)
         } catch {
             say("Could not save the note: \(error.localizedDescription)", on: overlay)
         }
@@ -271,9 +280,10 @@ final class ReviewSession: NSObject {
 
 extension ReviewSession: OverlayViewDelegate {
     func overlay(_ view: OverlayView, hoverAt point: CGPoint) -> OverlayView.Highlight? {
-        guard popover == nil, let overlay = overlay(for: view), let window = overlay.window,
-              let hit = ElementReader.hit(at: screenPoint(point, in: overlay), in: window)
-        else { return nil }
+        guard popover == nil, let overlay = overlay(for: view), let window = overlay.window else { return nil }
+        guard let hit = ElementReader.hit(at: screenPoint(point, in: overlay), in: window) else {
+            return .init(rect: Geometry.spot(around: point, within: view.bounds.size), label: Self.spotLabel, isSpot: true)
+        }
         return .init(
             rect: Geometry.windowTopLeft(hit.screenFrame, in: window.frame),
             label: hit.element.summary)
@@ -288,7 +298,7 @@ extension ReviewSession: OverlayViewDelegate {
             compose(on: overlay, rect: rect, target: Note.Target(
                 kind: .element, rect: Geometry.rect(rect), element: hit.element, view: viewName))
         } else {
-            let rect = CGRect(x: point.x - 24, y: point.y - 24, width: 48, height: 48)
+            let rect = Geometry.spot(around: point, within: view.bounds.size)
             compose(on: overlay, rect: rect, target: Note.Target(
                 kind: .region, rect: Geometry.rect(rect), view: viewName))
         }

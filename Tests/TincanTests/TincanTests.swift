@@ -142,3 +142,31 @@ struct PointerOnlyTests {
         #expect(titles.suffix(2) == ["Copy “tincan list” for Your Agent", "Show Notes in Finder"])
     }
 }
+
+@MainActor
+@Suite("Spots and sending")
+struct SpotAndSendTests {
+    @Test("a click with nothing under it notes a 48 point square that stays inside the window")
+    func spot() {
+        let size = CGSize(width: 800, height: 600)
+        #expect(Geometry.spot(around: CGPoint(x: 400, y: 300), within: size) == CGRect(x: 376, y: 276, width: 48, height: 48))
+        #expect(Geometry.spot(around: CGPoint(x: 5, y: 590), within: size) == CGRect(x: 0, y: 552, width: 48, height: 48))
+        #expect(Geometry.spot(around: CGPoint(x: 10, y: 10), within: CGSize(width: 30, height: 20)) == CGRect(x: 0, y: 0, width: 20, height: 20))
+    }
+
+    @Test("the menu says who is listening, in plain words")
+    func listening() {
+        let until = Date.distantFuture
+        #expect(NotesMenu.listening([]) == "No agent is listening")
+        #expect(NotesMenu.listening([Listener(name: "Claude", state: .waiting, until: until)]) == "Claude is listening")
+        #expect(NotesMenu.listening(["Claude", "Codex", "Cursor"].map { Listener(name: $0, state: .waiting, until: until) })
+            == "Claude, Codex and Cursor are listening")
+    }
+
+    @Test("the send switch never promises more than the listener is doing")
+    func sendLabel() {
+        #expect(Composer.sendLabel(Listener(name: "Claude", state: .waiting, until: .distantFuture)) == "Send to Claude now")
+        #expect(Composer.sendLabel(Listener(name: "Claude", state: .working, until: .distantFuture))
+            == "Send to Claude, next after the note it is on")
+    }
+}

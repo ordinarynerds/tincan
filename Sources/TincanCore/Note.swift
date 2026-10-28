@@ -18,11 +18,13 @@ public struct Note: Codable, Equatable, Sendable, Identifiable {
     public var target: Target
     public var images: Images
     public var resolution: Resolution?
+    /// Set when the person sent the note to a listening agent to work on straight away.
+    public var handoff: Handoff?
 
     public init(
         id: String, created: Date, text: String, app: AppInfo, context: [String: String] = [:],
         window: WindowInfo, target: Target, images: Images = Images(), status: Status = .open,
-        resolution: Resolution? = nil
+        resolution: Resolution? = nil, handoff: Handoff? = nil
     ) {
         self.schema = Self.schemaVersion
         self.id = id
@@ -35,6 +37,7 @@ public struct Note: Codable, Equatable, Sendable, Identifiable {
         self.target = target
         self.images = images
         self.resolution = resolution
+        self.handoff = handoff
     }
 
     public enum Status: String, Codable, Sendable, CaseIterable {
@@ -154,6 +157,20 @@ public struct Note: Codable, Equatable, Sendable, Identifiable {
         public init(at: Date, summary: String?) {
             self.at = at
             self.summary = summary
+        }
+    }
+
+    public struct Handoff: Codable, Equatable, Sendable {
+        /// The name the agent listens under, such as Claude.
+        public var agent: String
+        public var sent: Date
+        /// When `tincan watch` handed it to the agent. Nil while it waits for the agent to listen again.
+        public var delivered: Date?
+
+        public init(agent: String, sent: Date, delivered: Date? = nil) {
+            self.agent = agent
+            self.sent = sent
+            self.delivered = delivered
         }
     }
 

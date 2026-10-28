@@ -18,6 +18,9 @@ public struct NoteFormatter: Sendable {
         lines.append("  Note: \(note.text.replacingOccurrences(of: "\n", with: "\n        "))")
         if let path = store.imageURL(note.images.element)?.path { lines.append("  Element image: \(path)") }
         if let path = store.imageURL(note.images.window)?.path { lines.append("  Window image: \(path)") }
+        if let handoff = note.handoff {
+            lines.append("  Sent to: \(handoff.agent), \(handoff.delivered.map { "handed over \(age(of: $0))" } ?? "waiting for \(handoff.agent) to listen")")
+        }
         if let resolution = note.resolution {
             lines.append("  Resolved: \(age(of: resolution.at))\(resolution.summary.map { ", \($0)" } ?? "")")
         }

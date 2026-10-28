@@ -18,6 +18,7 @@ be running.
 - [Where notes are stored](#where-notes-are-stored)
 - [The note on disk](#the-note-on-disk)
 - [An agent working through notes](#an-agent-working-through-notes)
+- [Sending a note to a listening agent](#sending-a-note-to-a-listening-agent)
 - [The MCP server](#the-mcp-server)
 - [Threads and actors](#threads-and-actors)
 - [What Tincan deliberately does not do](#what-tincan-deliberately-does-not-do)
@@ -207,6 +208,14 @@ flowchart TD
     view --> viewname["View name, such as<br/>NSHostingView#lt;SettingsView#gt;"]
 ```
 
+Tincan can only name what the app reports to accessibility, which is exactly what VoiceOver reads.
+Three things come back with no element: views not in the tree at all (decorative images, plain
+backgrounds, a label outside its control's frame), parts merged into one element by
+`.accessibilityElement(children: .combine)` or a button wrapping a whole row, and drawings exposed
+as one element, such as a chart. Over those, hovering shows a dashed 48 pt square with "No element
+here. Click to note this spot, or drag around it", and a click notes exactly that square
+(`Geometry.spot`), so nothing on screen is out of reach and the person can see why.
+
 SwiftUI's accessibility nodes implement the `accessibility…` methods without declaring
 `NSAccessibilityProtocol`, so every read is `responds(to:)` followed by `value(forKey:)`. A dynamic
 call through `AnyObject` would send selectors to objects of the wrong type and crash.
@@ -378,6 +387,8 @@ container, and the agent needs the same variable.
 ├── .gitignore                        "*"  (the folder ignores itself)
 ├── notes/
 │   └── 20261028-091502-k3f9.json
+├── listeners/
+│   └── claude.json                   who is listening, kept fresh by tincan watch
 └── images/
     ├── 20261028-091502-k3f9-element.png
     └── 20261028-091502-k3f9-window.png
@@ -445,6 +456,11 @@ classDiagram
         Date at
         Optional~String~ summary
     }
+    class Handoff {
+        String agent
+        Date sent
+        Optional~Date~ delivered
+    }
     class Rect {
         Double x
         Double y
@@ -458,6 +474,7 @@ classDiagram
     Note --> Target : target
     Note --> Images : images
     Note --> Resolution
+    Note --> Handoff : handoff (optional)
     Target --> Kind
     Target --> Rect
     Target --> Element : element (optional)
@@ -511,8 +528,68 @@ sequenceDiagram
     P->>App: sees the fixes, reopens a note if one did not hold
 ```
 
-`tincan watch` polls the folder and prints each new open note as it appears, so an agent can work
-while the person is still reviewing.
+## Sending a note to a listening agent
+
+An agent that wants notes while the person is still reviewing listens under its name. The note
+sheet offers to send only to a listener that is live, so the switch never promises a delivery
+nobody will pick up.
+
+```mermaid
+sequenceDiagram
+    actor P as Person
+    participant App as Note sheet
+    participant F as .tincan/
+    participant W as tincan watch --as Claude --once
+    participant Ag as Claude
+
+    Ag->>W: starts it in the background
+    loop every second
+        W->>F: listeners/claude.json, state waiting, live for 8 s
+        W->>F: any open note sent to Claude and not yet delivered?
+    end
+    P->>App: clicks something, writes the note
+    App->>F: reads live listeners
+    App-->>P: "Send to Claude now" (checked if it was last time)
+    P->>App: Send Note
+    App->>F: notes/id.json with handoff agent Claude, delivered nil
+    W->>F: finds it, sets delivered
+    W->>F: listeners/claude.json, state working, live for 30 min
+    W-->>Ag: prints the note and exits
+    Ag->>Ag: fixes it, rebuilds, looks
+    Ag->>F: tincan resolve id -m "what changed"
+    Ag->>W: starts it again
+```
+
+```mermaid
+flowchart TD
+    sheet["Note sheet opens"] --> live{"Live listeners<br/>(until is in the future)"}
+    live -- none --> off["Send to your agent now: off, disabled,<br/>with how to start a listener underneath"]
+    live -- one --> one{"Its state"}
+    one -- waiting --> now["Send to Claude now"]
+    one -- working --> next["Send to Claude, next after the note it is on"]
+    live -- several --> pick["Send now to: Nobody, Claude, Codex…"]
+    now --> saved["Saved with handoff.agent"]
+    next --> saved
+    pick --> saved
+    saved --> queue["Waits until that agent's watch hands it over,<br/>oldest first, never lost if the agent is away"]
+```
+
+- **Leases, not processes.** A listener is a file with a name, a state and an `until` time. `watch`
+  pushes `until` 3 intervals plus 5 s ahead while it polls, so a killed watcher disappears from the
+  sheet within seconds. After `--once` hands over a note, `until` moves 30 minutes ahead in state
+  `working`, because the agent is busy fixing it and will listen again.
+- **A queue on disk.** Sending sets `handoff` on the note; delivery sets `handoff.delivered`. A note
+  sent to an agent that is away stays in the queue and is the first thing its next `watch` prints.
+  It is still an ordinary open note, so `tincan list` shows it too, marked "Sent to: Claude".
+- **Why `--once`.** Many agents are told when a background command ends, not when it prints. Exiting
+  after each note turns "a note arrived" into "the command finished", which every agent understands.
+  Without `--once`, `watch` keeps printing, for agents that can follow a stream.
+- **Names, not vendors.** Tincan does not know Claude, Codex or Cursor. The name is whatever the agent
+  passes with `--as` (or `TINCAN_AGENT`), and it is matched without regard to case.
+- **Tincan never starts an agent.** Sending only marks the note. Launching a second agent from the app
+  would put two sessions editing the same repository at once.
+
+`tincan watch --all` also prints new notes nobody sent, for an agent that wants everything.
 
 ## The MCP server
 
@@ -623,4 +700,5 @@ callbacks (notifications, event monitors, timers) arrive on the main queue and e
 | Run in release builds | The host app wraps `install` in `#if DEBUG`. |
 | Talk to the network | Notes stay on disk, and the folder ignores itself in git. |
 | Let an agent delete notes over MCP | Deleting is for the person, in the app or the command line. |
+| Start an agent when a note is sent | Sending only marks the note; a listening agent picks it up. A second session started from the app would edit the repository alongside the one already working there. |
 | Depend on any package | The MCP server and everything else use Apple frameworks only. |

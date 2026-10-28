@@ -32,7 +32,7 @@ public struct Command {
         var values: [String: String] = [:]
     }
 
-    static let valueOptions: Set<String> = ["--dir", "-m", "--message", "--interval"]
+    static let valueOptions: Set<String> = ["--dir", "-m", "--message", "--interval", "--as"]
 
     static func parse(_ arguments: [String]) -> Options {
         var options = Options()
@@ -94,7 +94,10 @@ public struct Command {
             case "path":
                 out(store.directory.path)
             case "watch":
-                watch(store: store, formatter: formatter, json: json, interval: Double(options.values["--interval"] ?? "") ?? 1)
+                watch(
+                    store: store, json: json, interval: Double(options.values["--interval"] ?? "") ?? 1,
+                    name: options.values["--as"] ?? environment["TINCAN_AGENT"] ?? "Agent",
+                    once: options.flags.contains("--once"), all: options.flags.contains("--all"))
             case "mcp":
                 MCPServer(store: store, now: now).serve()
             case "agents", "guide":
@@ -138,23 +141,46 @@ public struct Command {
         return String(decoding: try encoder.encode(note), as: UTF8.self)
     }
 
-    /// Prints each note that appears after it starts, until it is stopped. Built for agents that can
-    /// watch a long-running command and act on every line it prints.
-    func watch(store: NoteStore, formatter: NoteFormatter, json: Bool, interval: Double) {
+    /// Listens as an agent: announces itself so the app offers "Send to <name> now", and prints each
+    /// note sent to it the moment it arrives. With `--once` it stops after the first note it hands
+    /// over, for agents that are told when a background command ends rather than when it prints.
+    /// With `--all` it also prints every new note, sent or not.
+    func watch(store: NoteStore, json: Bool, interval: Double, name: String, once: Bool, all: Bool) {
         var seen = Set(store.all().map(\.id))
-        err("Watching \(store.directory.path) for new notes. Stop with Control-C.")
+        let interval = max(0.2, interval)
+        let lease = interval * 3 + 5
+        err("Listening as \(name) in \(store.directory.path). Notes sent to \(name) print as they arrive\(once ? ", then this stops" : ""). Stop with Control-C.")
         while true {
-            Thread.sleep(forTimeInterval: max(0.2, interval))
-            for note in store.notes(status: .open) where !seen.contains(note.id) {
+            try? store.announce(Listener(name: name, state: .waiting, until: now().addingTimeInterval(lease)))
+            var handed = false
+            for note in store.pendingHandoffs(for: name) {
+                emit(note, store: store, json: json)
+                _ = try? store.markDelivered(note.id, at: now())
                 seen.insert(note.id)
-                if json, let line = try? jsonLine(note) {
-                    out(line)
-                } else {
-                    out(NoteFormatter(store: store, now: now()).line(note) + "\n")
-                }
-                fflush(stdout)
+                handed = true
             }
+            if all {
+                for note in store.notes(status: .open) where !seen.contains(note.id) {
+                    emit(note, store: store, json: json)
+                    seen.insert(note.id)
+                    handed = true
+                }
+            }
+            if once && handed {
+                try? store.announce(Listener(name: name, state: .working, until: now().addingTimeInterval(Listener.workingLease)))
+                return
+            }
+            Thread.sleep(forTimeInterval: interval)
         }
+    }
+
+    func emit(_ note: Note, store: NoteStore, json: Bool) {
+        if json, let line = try? jsonLine(note) {
+            out(line)
+        } else {
+            out(NoteFormatter(store: store, now: now()).line(note) + "\n")
+        }
+        fflush(stdout)
     }
 
     public static let usage = """
@@ -166,12 +192,15 @@ public struct Command {
           tincan resolve <id> [-m "what changed"]     Mark a note as handled
           tincan reopen <id>                          Mark it open again
           tincan delete <id>                          Remove a note and its images
-          tincan watch [--json]                       Print new notes as they arrive
+          tincan watch --as <name> [--once] [--all] [--json]
+                                                      Listen as an agent: print notes sent to <name>
           tincan path                                 Where notes are stored
           tincan agents                               How an agent should work through notes
           tincan mcp                                  Serve the notes to an agent over MCP (stdio)
 
         An <id> can be the full id or any unique start or end of it.
+        While `watch --as Claude` runs, the app offers "Send to Claude now" on each note. --once stops
+        after handing over a note; --all also prints new notes nobody sent. TINCAN_AGENT sets the name.
         Notes are found in $TINCAN_DIR, else --dir, else .tincan at the root of the current git repository.
         """
 }

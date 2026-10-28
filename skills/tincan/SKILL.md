@@ -25,8 +25,10 @@ the app's own context (such as the current screen), and screenshots.
 
 Leave a note open and ask the person when it is ambiguous or conflicts with an earlier decision.
 
-To take notes as they arrive while the person is still reviewing, run `tincan watch --json` in the
-background and handle each line.
+To take notes while the person is still reviewing, listen under your own name, for example
+`tincan watch --as Claude --once --json`, as a background command. The app then shows "Send to
+Claude now" on each note. When the command prints a note and exits, work it as above, then start it
+again. Notes sent while you work queue up and are handed over in order.
 
 If the `tincan_*` MCP tools are available, use them instead of the command: `tincan_list_notes`,
 then `tincan_get_note` (it attaches both screenshots as images), then `tincan_resolve_note` with the
