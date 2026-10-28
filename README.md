@@ -135,6 +135,8 @@ Tincan.install(Tincan.Configuration { [weak model] in
 
 ## How it works
 
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) has diagrams of every part: the review session, element lookup, capture, storage, the note format, the command and the MCP server.
+
 - **Finding the element.** The app asks its own windows what is under the pointer through the AppKit accessibility API. SwiftUI only builds its accessibility tree once an accessibility client has contacted the app, so when review mode starts, Tincan asks the app one question about itself through the client API, off the main thread. That needs no Accessibility permission.
 - **Screenshots.** If the app already has Screen Recording permission, ScreenCaptureKit captures the window exactly as shown. Otherwise the window draws itself into a bitmap, which needs no permission; materials and vibrancy may render flatter than on screen. Tincan never asks for a permission itself.
 - **Overlay.** A transparent panel sits above each window as a child window, so it moves with it and never changes the window's own view hierarchy.
