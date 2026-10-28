@@ -69,6 +69,25 @@ tincan agents                     # the instructions below, for your agent's con
 
 An id can be shortened to any unique start or end, so `tincan show k3f9` works.
 
+### Over MCP
+
+`tincan mcp` serves the same notes as Model Context Protocol tools over stdio, so an agent sees the screenshots as images instead of file paths. Register it once per project:
+
+```sh
+claude mcp add tincan -- tincan mcp          # Claude Code
+```
+
+Any MCP client works the same way: the command is `tincan mcp`, run from inside the repository (or with `TINCAN_DIR` set).
+
+| Tool | Does |
+|---|---|
+| `tincan_list_notes` | Open notes, oldest first. `status` (open, resolved, all), `limit`, `offset` |
+| `tincan_get_note` | One note, with the element and window screenshots attached as images |
+| `tincan_resolve_note` | Mark it handled, with a one-line `summary` the person will read |
+| `tincan_reopen_note` | Mark it open again |
+
+Deleting stays in the command line and the app, so an agent cannot throw a note away.
+
 Put this in your `AGENTS.md` or `CLAUDE.md`:
 
 ```markdown

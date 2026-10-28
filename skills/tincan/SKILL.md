@@ -27,3 +27,7 @@ Leave a note open and ask the person when it is ambiguous or conflicts with an e
 
 To take notes as they arrive while the person is still reviewing, run `tincan watch --json` in the
 background and handle each line.
+
+If the `tincan_*` MCP tools are available, use them instead of the command: `tincan_list_notes`,
+then `tincan_get_note` (it attaches both screenshots as images), then `tincan_resolve_note` with the
+same one-line summary. Register them with `claude mcp add tincan -- tincan mcp`.

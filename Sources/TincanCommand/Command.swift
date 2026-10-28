@@ -95,6 +95,8 @@ public struct Command {
                 out(store.directory.path)
             case "watch":
                 watch(store: store, formatter: formatter, json: json, interval: Double(options.values["--interval"] ?? "") ?? 1)
+            case "mcp":
+                MCPServer(store: store, now: now).serve()
             case "agents", "guide":
                 out(AgentGuide.text)
             case "help", "-h", "--help":
@@ -167,6 +169,7 @@ public struct Command {
           tincan watch [--json]                       Print new notes as they arrive
           tincan path                                 Where notes are stored
           tincan agents                               How an agent should work through notes
+          tincan mcp                                  Serve the notes to an agent over MCP (stdio)
 
         An <id> can be the full id or any unique start or end of it.
         Notes are found in $TINCAN_DIR, else --dir, else .tincan at the root of the current git repository.

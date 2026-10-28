@@ -15,6 +15,7 @@ final class ReviewSession: NSObject {
     private var timer: Timer?
     private var popover: NSPopover?
     private var running = false
+    private var lastOpenCount = -1
 
     struct Overlay {
         weak var window: NSWindow?
@@ -160,6 +161,10 @@ final class ReviewSession: NSObject {
             }
             overlay.view.instructions =
                 open.isEmpty ? Self.instructions : "\(Self.instructions) \(open.count) open."
+        }
+        if open.count != lastOpenCount {
+            lastOpenCount = open.count
+            Tincan.notesChanged()
         }
     }
 

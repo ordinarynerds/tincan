@@ -27,16 +27,20 @@ public enum Tincan {
         public var directory: URL?
         /// The key that turns review mode on and off. Nil when the app offers its own menu command.
         public var shortcut: Shortcut?
+        /// A switch in the menu bar showing whether review mode is on and how many notes are open.
+        public var showsStatusItem: Bool
         /// Facts about the app's state worth attaching to every note, such as the current screen.
         public var context: @MainActor () -> [String: String]
 
         public init(
             directory: URL? = nil,
             shortcut: Shortcut? = .default,
+            showsStatusItem: Bool = true,
             context: @escaping @MainActor () -> [String: String] = { [:] }
         ) {
             self.directory = directory
             self.shortcut = shortcut
+            self.showsStatusItem = showsStatusItem
             self.context = context
         }
     }
@@ -62,6 +66,7 @@ public enum Tincan {
     static var store: NoteStore?
     static var session: ReviewSession?
     static var shortcutMonitor: Any?
+    static var statusItem: StatusItem?
 
     /// Where this app's notes are written, once `install` has run.
     public static var directory: URL? { store?.directory }
@@ -73,7 +78,10 @@ public enum Tincan {
         let directory = TincanLocation.resolve(
             explicit: configuration.directory, start: URL(fileURLWithPath: file),
             fallbackName: Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName)
-        store = NoteStore(directory: directory)
+        let store = NoteStore(directory: directory)
+        self.store = store
+        statusItem?.remove()
+        statusItem = configuration.showsStatusItem ? StatusItem(store: store, shortcut: configuration.shortcut) : nil
         if let monitor = shortcutMonitor { NSEvent.removeMonitor(monitor) }
         shortcutMonitor = nil
         if let shortcut = configuration.shortcut {
@@ -92,11 +100,17 @@ public enum Tincan {
         let session = ReviewSession(store: store, context: configuration.context)
         self.session = session
         session.start()
+        statusItem?.refresh()
     }
 
     public static func stop() {
         session?.stop()
         session = nil
+        statusItem?.refresh()
+    }
+
+    static func notesChanged() {
+        statusItem?.refresh()
     }
 
     public static func toggle() {
