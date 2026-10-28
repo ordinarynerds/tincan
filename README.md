@@ -13,7 +13,7 @@ No screenshots to crop, no "the button on the left, no, the other one".
 Add the package in Xcode (File > Add Package Dependencies) or in `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/<owner>/tincan", from: "0.1.0")
+.package(url: "https://github.com/ordinarynerds/tincan", from: "0.1.0")
 ```
 
 Link the `Tincan` library to your app target and install it at launch, in debug builds only:
