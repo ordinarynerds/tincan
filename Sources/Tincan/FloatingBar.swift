@@ -104,9 +104,10 @@ final class FloatingBar {
         UserDefaults.standard.set(NSStringFromPoint(panel.frame.origin), forKey: Self.originKey)
     }
 
-    /// Centred near the bottom of the screen, above the Dock, where it covers the least of a window.
+    /// Centred just below the menu bar, clear of the Dock and of the instructions review mode shows
+    /// along the bottom of each window.
     static func defaultOrigin(size: CGSize, visibleFrame: CGRect) -> CGPoint {
-        CGPoint(x: (visibleFrame.midX - size.width / 2).rounded(), y: visibleFrame.minY + 24)
+        CGPoint(x: (visibleFrame.midX - size.width / 2).rounded(), y: visibleFrame.maxY - size.height - 12)
     }
 
     /// A saved position counts only if the whole bar is still on a screen, so unplugging a display

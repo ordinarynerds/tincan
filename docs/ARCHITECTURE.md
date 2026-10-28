@@ -339,7 +339,8 @@ flowchart TD
   windows that are not panels, so the bar never gets one, and window captures never include it.
 - **First click works.** The hosting view and the drag area accept the first mouse, so a control works
   without bringing the bar forward first.
-- **Where it sits.** Centred 24 pt above the Dock at first. Dragging anywhere that is not a control
+- **Where it sits.** Centred 12 pt below the menu bar at first, clear of the Dock and of the
+  instructions along the bottom of each window. Dragging anywhere that is not a control
   moves it, and its origin is saved in `TincanFloatingBarOrigin`. A saved spot that is no longer
   fully on a screen is ignored, so unplugging a display cannot strand it.
 - **When it shows.** It hides while the app is in the background and comes back with it. Hiding it

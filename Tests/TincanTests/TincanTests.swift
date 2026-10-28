@@ -110,10 +110,10 @@ struct PointerOnlyTests {
         #expect(!ReviewSession.passesThrough(optionHeld: true, usingApp: true, composing: true))
     }
 
-    @Test("the bar starts centred above the Dock, and a saved spot off every screen is not used")
+    @Test("the bar starts centred below the menu bar, and a saved spot off every screen is not used")
     func barPosition() {
         let visible = CGRect(x: 0, y: 80, width: 1440, height: 820)
-        #expect(FloatingBar.defaultOrigin(size: CGSize(width: 240, height: 34), visibleFrame: visible) == CGPoint(x: 600, y: 104))
+        #expect(FloatingBar.defaultOrigin(size: CGSize(width: 240, height: 34), visibleFrame: visible) == CGPoint(x: 600, y: 854))
         #expect(FloatingBar.isOnScreen(CGRect(x: 100, y: 100, width: 240, height: 34), screens: [visible]))
         #expect(!FloatingBar.isOnScreen(CGRect(x: 1300, y: 100, width: 240, height: 34), screens: [visible]))
         #expect(FloatingBar.isOnScreen(

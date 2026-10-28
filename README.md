@@ -68,7 +68,7 @@ Notes already left show as numbered pins. Hover a pin to read it; click it to co
 
 A pin in the menu bar shows whether review mode is on (filled orange) and how many notes are open. Its menu starts and stops review mode, lists the latest open notes (choose one to copy its id), copies `tincan list` for your agent, and shows the notes folder in Finder. Turn it off with `Tincan.Configuration(showsStatusItem: false)`.
 
-The floating bar sits centred above the Dock until you drag it somewhere else, and stays where you leave it. It hides while the app is in the background, is never in a screenshot, and never gets an overlay. Hide it from its notes menu and bring it back from the menu bar switch, or turn it off with `Tincan.Configuration(showsFloatingBar: false)`.
+The floating bar sits centred below the menu bar until you drag it somewhere else, and stays where you leave it. It hides while the app is in the background, is never in a screenshot, and never gets an overlay. Hide it from its notes menu and bring it back from the menu bar switch, or turn it off with `Tincan.Configuration(showsFloatingBar: false)`.
 
 ## Working through notes, as an agent
 
